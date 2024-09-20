@@ -5,7 +5,13 @@ use std::vec::Vec;
 // Not exhaustive, of course.
 const VIRT_NAMES: [&str; 1] = ["Virtual"];
 const VPN_NAMES: [&str; 2] = ["WireGuard", "OpenVPN"];
-const HW_NAMES: [&str; 3] = ["Intel(R)", "MediaTek", "Realtek"];
+const HW_NAMES: [&str; 16] = [
+    // Most popular first
+    "Broadcom", "Intel(R)", "MediaTek", "Qualcomm", "Realtek",
+    // And the rest in alphabet order
+    "AC1200", "ASIX", "Atheros", "Chelsio", "D-Link", "Dell", "JMicron", "Marvell", "Mellanox",
+    "QLogic", "Ralink",
+];
 
 struct ParsedDevices<'v> {
     src: Option<&'v Device>,
@@ -133,11 +139,11 @@ fn main() -> Result<(), pcap::Error> {
 
     let mut count = 0;
     cap.for_each(None, |packet| {
-        println!("Got {:?}", packet.header);
+        println!("{} Got {:?}", count, packet.header);
         count += 1;
-        if count > 10 {
-            panic!("ow");
-        }
+        // if count > 10 {
+        //     panic!("ow");
+        // }
     })?;
     Ok(())
 }
