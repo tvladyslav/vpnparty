@@ -29,12 +29,11 @@ fn get_promising_devices() -> Result<Vec<Device>, pcap::Error> {
                 && !d.flags.is_loopback()
                 && !d.addresses.is_empty()
                 && d.flags.connection_status == ConnectionStatus::Connected
-            // && !d
-            //     .desc
-            //     .as_ref()
-            //     .unwrap_or(&String::new())
-            //     // "Virtual" also filters out L2TP and similar, because they are "Hyper-V Virtual Ethernet Adapter"
-            //     .contains("Virtual")
+                && !d
+                    .desc
+                    .as_ref()
+                    .unwrap_or(&String::new())
+                    .contains("VirtualBox")
         })
         .collect();
     Ok(filtered)
@@ -79,14 +78,15 @@ fn split_to_src_and_dst(full_list: &[Device]) -> ParsedDevices {
 fn verify_devices<'r>(pd: &'r ParsedDevices) -> Result<&'r Device, pcap::Error> {
     if !pd.virt.is_empty() {
         println!("WARNING!\n\tThere are active virtual network adapters in your system.");
-        println!("\tPlease disable them to prevent troubles. Here are PowerShell commands (run as Administrator):");
+        println!("\tTo prevent troubles either disable virtual adapters or specify the correct HW adapter via command line.");
+        println!("\tHere are PowerShell commands (run as Administrator):");
         for vd in &pd.virt {
             println!(
                 "\t\tDisable-NetAdapter -InterfaceDescription  \"{}\"",
                 vd.desc.clone().unwrap()
             );
         }
-        println!("\tFeel free to enable them black using following PowerShell commands:");
+        println!("\tFeel free to enable them back using following PowerShell commands:");
         for vd in &pd.virt {
             println!(
                 "\t\tEnable-NetAdapter -InterfaceDescription  \"{}\"",
