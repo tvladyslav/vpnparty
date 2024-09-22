@@ -1,5 +1,6 @@
-use pcap::{ConnectionStatus, Device};
+use pcap::{Active, Capture, ConnectionStatus, Device};
 use std::io::ErrorKind;
+use std::net::IpAddr;
 use std::vec::Vec;
 
 // Not exhaustive, of course.
@@ -12,6 +13,11 @@ const HW_NAMES: [&str; 16] = [
     "AC1200", "ASIX", "Atheros", "Chelsio", "D-Link", "Dell", "JMicron", "Marvell", "Mellanox",
     "QLogic", "Ralink",
 ];
+
+//============ Configuration =====================
+/// Resend the broadcast packet or modify it to regular UDP
+const BROADCAST: bool = true;
+//============ End config ========================
 
 struct ParsedDevices<'v> {
     src: Option<&'v Device>,
@@ -122,28 +128,71 @@ fn print_devices(devs: &[Device]) {
 }
 
 fn main() -> Result<(), pcap::Error> {
-    let devs = get_promising_devices()?;
+    let devs: Vec<Device> = get_promising_devices()?;
     // TODO: CLI to disable prints
     print_devices(&devs);
 
     // TODO: CLI option to disable this heuristic
-    let split_devices = split_to_src_and_dst(&devs);
+    let split_devices: ParsedDevices = split_to_src_and_dst(&devs);
     let src_dev: &Device = verify_devices(&split_devices)?;
 
     // Setup Capture
-    let mut cap = pcap::Capture::from_device(src_dev.clone())?
+    // TODO: capture virtual devices as well?
+    let mut hw_cap = pcap::Capture::from_device(src_dev.clone())?
         .immediate_mode(true)
         .open()?;
 
-    cap.filter("dst 255.255.255.255 and udp", true)?;
+    hw_cap.filter("dst 255.255.255.255 and udp", true)?;
 
-    let mut count = 0;
-    cap.for_each(None, |packet| {
-        println!("{} Got {:?}", count, packet.header);
-        count += 1;
-        // if count > 10 {
-        //     panic!("ow");
-        // }
-    })?;
-    Ok(())
+    // For weirdos with multiple active VPNs
+    let num_of_vpns = split_devices.dst.len();
+
+    // Open all destination devices
+    let mut vpn_ipv4_cap: Vec<([u8; 4], Capture<Active>)> = Vec::with_capacity(num_of_vpns);
+    for vpn in &split_devices.dst {
+        let v = pcap::Capture::from_device((*vpn).clone())?.open()?;
+        if let IpAddr::V4(ip4) = vpn.addresses[0].addr {
+            vpn_ipv4_cap.push((ip4.octets(), v));
+        } else {
+            println!("Error: IPv6 VPN address is not supported here.")
+        }
+    }
+
+    let mut sq = pcap::sendqueue::SendQueue::new(1024 * 1024).unwrap();
+
+    // No panics, unwraps or "?" in this loop. Report failures and proceed to next packet.
+    loop {
+        let packet = match hw_cap.next_packet() {
+            Ok(p) => p,
+            Err(e) => {
+                println!("Error while receiving packet: {}", e);
+                continue;
+            }
+        };
+        let packet_len = packet.header.len as usize;
+        for (ip4, vcap) in &mut vpn_ipv4_cap {
+            let mut pktbuf: [u8; 1514] = [0u8; 1514];
+            pktbuf[0..packet_len].copy_from_slice(packet.data);
+            pktbuf[26..30].copy_from_slice(ip4);
+
+            if !BROADCAST {
+                unimplemented!("Modify dst IP");
+            }
+
+            // This code looks simpler, but doesn't work:
+            // Error while resending packet: libpcap error: send error: PacketSendPacket failed: A device attached to the system is not functioning.  (31)
+            // if let Err(e) = vcap.sendpacket(&pktbuf[0..packet_len]) {
+            //     println!("Error while resending packet: {}", e);
+            // }
+
+            if let Err(e) = sq.queue(None, &pktbuf[0..packet_len]) {
+                println!("Error while adding packet to the queue: {}", e);
+                continue;
+            }
+            if let Err(e) = sq.transmit(vcap, pcap::sendqueue::SendSync::Off) {
+                println!("Error while transmitting packet: {}", e);
+                continue;
+            }
+        }
+    }
 }
