@@ -102,14 +102,14 @@ fn verify_devices<'r>(pd: &'r ParsedDevices) -> Result<&'r Device, pcap::Error> 
         // This is just a warning, continue execution and hope for best.
     }
     if pd.dst.is_empty() {
-        println!("Can't find your VPN connection.");
-        println!("Please specify it manually via CLI.");
+        eprintln!("Can't find your VPN connection.");
+        eprintln!("Please specify it manually via CLI.");
         return Err(pcap::Error::IoError(ErrorKind::NotFound));
     }
     let src_dev = match pd.src {
         None => {
-            println!("Can't find your HW network adapter.");
-            println!("Please specify it manually via CLI.");
+            eprintln!("Can't find your HW network adapter.");
+            eprintln!("Please specify it manually via CLI.");
             return Err(pcap::Error::IoError(ErrorKind::NotFound));
         }
         Some(s) => s,
@@ -156,7 +156,7 @@ fn main() -> Result<(), pcap::Error> {
         if let IpAddr::V4(ip4) = vpn.addresses[0].addr {
             vpn_ipv4_cap.push((ip4.octets(), v));
         } else {
-            println!("Error: IPv6 VPN address is not supported here.")
+            eprintln!("Error: IPv6 VPN address is not supported here.")
         }
     }
 
@@ -167,7 +167,7 @@ fn main() -> Result<(), pcap::Error> {
         let packet = match hw_cap.next_packet() {
             Ok(p) => p,
             Err(e) => {
-                println!("Error while receiving packet: {}", e);
+                eprintln!("Error while receiving packet: {}", e);
                 continue;
             }
         };
@@ -184,15 +184,15 @@ fn main() -> Result<(), pcap::Error> {
             // This code looks simpler, but doesn't work:
             // Error while resending packet: libpcap error: send error: PacketSendPacket failed: A device attached to the system is not functioning.  (31)
             // if let Err(e) = vcap.sendpacket(&pktbuf[0..packet_len]) {
-            //     println!("Error while resending packet: {}", e);
+            //     eprintln!("Error while resending packet: {}", e);
             // }
 
             if let Err(e) = sq.queue(None, &pktbuf[0..packet_len]) {
-                println!("Error while adding packet to the queue: {}", e);
+                eprintln!("Error while adding packet to the queue: {}", e);
                 continue;
             }
             if let Err(e) = sq.transmit(vcap, pcap::sendqueue::SendSync::Off) {
-                println!("Error while transmitting packet: {}", e);
+                eprintln!("Error while transmitting packet: {}", e);
                 continue;
             }
         }
