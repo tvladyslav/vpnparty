@@ -127,6 +127,8 @@ fn print_devices(devs: &[Device]) {
     }
 }
 
+// pcap::sendqueue::SendQueue is a windows-only feature :(
+#[cfg(windows)]
 fn main() -> Result<(), pcap::Error> {
     let devs: Vec<Device> = get_promising_devices()?;
     // TODO: CLI to disable prints
@@ -195,4 +197,9 @@ fn main() -> Result<(), pcap::Error> {
             }
         }
     }
+}
+
+#[cfg(not(windows))]
+fn main() {
+    unimplemented!("Windows-only program.");
 }
