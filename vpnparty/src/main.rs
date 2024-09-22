@@ -15,8 +15,7 @@ const HW_NAMES: [&str; 16] = [
 ];
 
 //============ Configuration =====================
-/// Resend the broadcast packet or modify it to regular UDP
-const BROADCAST: bool = true;
+
 //============ End config ========================
 
 struct ParsedDevices<'v> {
@@ -39,7 +38,7 @@ fn get_promising_devices() -> Result<Vec<Device>, pcap::Error> {
                     .desc
                     .as_ref()
                     .unwrap_or(&String::new())
-                    .contains("VirtualBox")
+                    .contains("VirtualBox") // TODO: test
         })
         .collect();
     Ok(filtered)
@@ -127,8 +126,40 @@ fn print_devices(devs: &[Device]) {
     }
 }
 
-// pcap::sendqueue::SendQueue is a windows-only feature :(
-#[cfg(windows)]
+fn rewrite_ip4_checksum(buf: &mut [u8]) -> Result<(), pcap::Error> {
+    if buf.len() != 20 {
+        return Err(pcap::Error::IoError(ErrorKind::Other));
+    }
+    buf[10] = 0u8;
+    buf[11] = 0u8;
+    let checksum: u16 = calculate_ip4_checksum(buf);
+    buf[10] = (checksum >> 8) as u8;
+    buf[11] = (checksum & 0xFF) as u8;
+    Ok(())
+}
+
+fn calculate_ip4_checksum(buf: &[u8]) -> u16 {
+    let sum: usize = buf
+        .chunks(2)
+        .map(|c| ((c[0] as usize) << 8) + (c[1] as usize))
+        .sum();
+    let carry: usize = sum >> 16;
+    let checksum: u16 = !(((sum & 0xFFFF) + carry) as u16);
+    checksum
+}
+
+#[test]
+fn ip4_checksum() {
+    #[rustfmt::skip]
+    let input: [u8; 20] = [
+        0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11,
+        0x00, 0x00, 0xc0, 0xa8, 0x00, 0x01, 0xc0, 0xa8, 0x00, 0xc7,
+    ];
+    let given_checksum = calculate_ip4_checksum(&input);
+    let expected_checksum: u16 = 0xb861u16;
+    assert_eq!(given_checksum, expected_checksum);
+}
+
 fn main() -> Result<(), pcap::Error> {
     let devs: Vec<Device> = get_promising_devices()?;
     // TODO: CLI to disable prints
@@ -160,8 +191,6 @@ fn main() -> Result<(), pcap::Error> {
         }
     }
 
-    let mut sq = pcap::sendqueue::SendQueue::new(1024 * 1024).unwrap();
-
     // No panics, unwraps or "?" in this loop. Report failures and proceed to next packet.
     loop {
         let packet = match hw_cap.next_packet() {
@@ -171,35 +200,25 @@ fn main() -> Result<(), pcap::Error> {
                 continue;
             }
         };
-        let packet_len = packet.header.len as usize;
+        // Start from 14th byte to skip Ethernet Frame.
+        let no_eth_packet_len = (packet.header.len - 14) as usize;
         for (ip4, vcap) in &mut vpn_ipv4_cap {
             let mut pktbuf: [u8; 1514] = [0u8; 1514];
-            pktbuf[0..packet_len].copy_from_slice(packet.data);
-            pktbuf[26..30].copy_from_slice(ip4);
+            let no_ether_pktbuf: &mut [u8] = &mut pktbuf[0..no_eth_packet_len];
 
-            if !BROADCAST {
-                unimplemented!("Modify dst IP");
-            }
+            // Rewrite source and destination IPs
+            no_ether_pktbuf.copy_from_slice(&packet.data[14..]);
+            no_ether_pktbuf[12..16].copy_from_slice(ip4);
+            no_ether_pktbuf[16..20].copy_from_slice(&[10, 0, 0, 2]); //TODO!!!
+            rewrite_ip4_checksum(&mut no_ether_pktbuf[0..20])?;
 
-            // This code looks simpler, but doesn't work:
-            // Error while resending packet: libpcap error: send error: PacketSendPacket failed: A device attached to the system is not functioning.  (31)
-            // if let Err(e) = vcap.sendpacket(&pktbuf[0..packet_len]) {
-            //     eprintln!("Error while resending packet: {}", e);
-            // }
+            //TODO: UDP checksum (optional)
 
-            if let Err(e) = sq.queue(None, &pktbuf[0..packet_len]) {
-                eprintln!("Error while adding packet to the queue: {}", e);
-                continue;
-            }
-            if let Err(e) = sq.transmit(vcap, pcap::sendqueue::SendSync::Off) {
-                eprintln!("Error while transmitting packet: {}", e);
-                continue;
+            println!("{:?}", no_ether_pktbuf);
+
+            if let Err(e) = vcap.sendpacket(no_ether_pktbuf) {
+                eprintln!("Error while resending packet: {}", e);
             }
         }
     }
-}
-
-#[cfg(not(windows))]
-fn main() {
-    unimplemented!("Windows-only program.");
 }
