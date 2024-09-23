@@ -1,7 +1,10 @@
+use clap::{ArgAction, Parser};
 use pcap::{Active, Capture, ConnectionStatus, Device};
 use std::io::ErrorKind;
 use std::net::IpAddr;
 use std::vec::Vec;
+
+mod logger;
 
 // Not exhaustive, of course.
 const VIRT_NAMES: [&str; 1] = ["Virtual"];
@@ -14,9 +17,11 @@ const HW_NAMES: [&str; 16] = [
     "QLogic", "Ralink",
 ];
 
-//============ Configuration =====================
-
-//============ End config ========================
+#[derive(Parser, Default, Debug)]
+struct Arguments {
+    #[clap(short = 'v', long = "verbose", action = ArgAction::Count)]
+    verbosity: u8,
+}
 
 struct ParsedDevices<'v> {
     src: Option<&'v Device>,
@@ -82,33 +87,33 @@ fn split_to_src_and_dst(full_list: &[Device]) -> ParsedDevices {
 
 fn verify_devices<'r>(pd: &'r ParsedDevices) -> Result<&'r Device, pcap::Error> {
     if !pd.virt.is_empty() {
-        println!("WARNING!\n\tThere are active virtual network adapters in your system.");
-        println!("\tTo prevent troubles either disable virtual adapters or specify the correct HW adapter via command line.");
-        println!("\tHere are PowerShell commands (run as Administrator):");
+        warn!("There are active virtual network adapters in your system.");
+        warn!("To prevent troubles either disable virtual adapters or specify the correct HW adapter via command line.");
+        warn!("Here are PowerShell commands (run as Administrator):");
         for vd in &pd.virt {
-            println!(
-                "\t\tDisable-NetAdapter -InterfaceDescription  \"{}\"",
+            warn!(
+                "\tDisable-NetAdapter -InterfaceDescription  \"{}\"",
                 vd.desc.clone().unwrap()
             );
         }
-        println!("\tFeel free to enable them back using following PowerShell commands:");
+        warn!("Feel free to enable them back using following PowerShell commands:");
         for vd in &pd.virt {
-            println!(
-                "\t\tEnable-NetAdapter -InterfaceDescription  \"{}\"",
+            warn!(
+                "\tEnable-NetAdapter -InterfaceDescription  \"{}\"",
                 vd.desc.clone().unwrap()
             );
         }
         // This is just a warning, continue execution and hope for best.
     }
     if pd.dst.is_empty() {
-        eprintln!("Can't find your VPN connection.");
-        eprintln!("Please specify it manually via CLI.");
+        critical!("Can't find your VPN connection.");
+        critical!("Please specify it manually via CLI.");
         return Err(pcap::Error::IoError(ErrorKind::NotFound));
     }
     let src_dev = match pd.src {
         None => {
-            eprintln!("Can't find your HW network adapter.");
-            eprintln!("Please specify it manually via CLI.");
+            critical!("Can't find your HW network adapter.");
+            critical!("Please specify it manually via CLI.");
             return Err(pcap::Error::IoError(ErrorKind::NotFound));
         }
         Some(s) => s,
@@ -117,11 +122,11 @@ fn verify_devices<'r>(pd: &'r ParsedDevices) -> Result<&'r Device, pcap::Error> 
 }
 
 fn print_devices(devs: &[Device]) {
-    println!("Devices:");
+    info!("Devices:");
     for dev in devs {
-        println!("{0}\t{1}", dev.name, dev.desc.clone().unwrap_or_default());
+        info!("{0}\t{1}", dev.name, dev.desc.clone().unwrap_or_default());
         for a in &dev.addresses {
-            println!("\t{0}", a.addr);
+            info!("\t{0}", a.addr);
         }
     }
 }
@@ -161,8 +166,12 @@ fn ip4_checksum() {
 }
 
 fn main() -> Result<(), pcap::Error> {
+    let args = Arguments::parse();
+    logger::set_verbosity(args.verbosity);
+
+    debug!("{:?}", args);
+
     let devs: Vec<Device> = get_promising_devices()?;
-    // TODO: CLI to disable prints
     print_devices(&devs);
 
     // TODO: CLI option to disable this heuristic
@@ -187,19 +196,27 @@ fn main() -> Result<(), pcap::Error> {
         if let IpAddr::V4(ip4) = vpn.addresses[0].addr {
             vpn_ipv4_cap.push((ip4.octets(), v));
         } else {
-            eprintln!("Error: IPv6 VPN address is not supported here.")
+            critical!("Error: IPv6 VPN address is not supported here.")
         }
     }
+
+    //TODO: network discovery for computers on the other side of VPN
 
     // No panics, unwraps or "?" in this loop. Report failures and proceed to next packet.
     loop {
         let packet = match hw_cap.next_packet() {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("Error while receiving packet: {}", e);
+                error!("Error while receiving packet: {}", e);
                 continue;
             }
         };
+
+        if packet.header.len < 42 {
+            error!("This packet is empty, skipping.");
+            continue;
+        }
+
         // Start from 14th byte to skip Ethernet Frame.
         let no_eth_packet_len = (packet.header.len - 14) as usize;
         for (ip4, vcap) in &mut vpn_ipv4_cap {
@@ -210,14 +227,18 @@ fn main() -> Result<(), pcap::Error> {
             no_ether_pktbuf.copy_from_slice(&packet.data[14..]);
             no_ether_pktbuf[12..16].copy_from_slice(ip4);
             no_ether_pktbuf[16..20].copy_from_slice(&[10, 0, 0, 2]); //TODO!!!
-            rewrite_ip4_checksum(&mut no_ether_pktbuf[0..20])?;
+
+            if rewrite_ip4_checksum(&mut no_ether_pktbuf[0..20]).is_err() {
+                critical!("Should never happen! Checksum calculation error.");
+                continue;
+            }
 
             //TODO: UDP checksum (optional)
 
-            println!("{:?}", no_ether_pktbuf);
+            trace!("{:?}", no_ether_pktbuf);
 
             if let Err(e) = vcap.sendpacket(no_ether_pktbuf) {
-                eprintln!("Error while resending packet: {}", e);
+                error!("Error while resending packet: {}", e);
             }
         }
     }
