@@ -1,4 +1,4 @@
-use pcap::{Active, Capture, ConnectionStatus, Device};
+use pcap::{Active, Address, Capture, ConnectionStatus, Device};
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 use std::vec::Vec;
@@ -24,31 +24,43 @@ USAGE:
 
 FLAGS:
   -h, --help              Prints help information
-  -d, --devices           List available network devices
+  --devices               List available network adapters
+  --monochrome            Don't use colors in output
 
 OPTIONS:
   -v, --verbose  NUMBER   Verbosity level [0-3].
   -s, --srcdev   NAME     Name of the device, which receives broadcast packets.
                           Usually this is your Ethernet or Wi-Fi adapter, but might be a Hyper-V Virtual adapter.
                           Example: --srcdev=\\Device\\NPF_{D0B8AF5E-B11D-XXXX-XXXX-XXXXXXXXXXXX}
-  -b, --buddyip  IP IP    Space-separated list of your teammates IP addresses.
+  -d, --dstdevs NAME NAME Space-separated list of your VPN connection devices.
+                          Supported VPNs are Wireguard and OpenVPN, altough other should work as well.
+                          Example --dstdevs \\Device\\NPF_{CFB8AF5E-A00C-XXXX-XXXX-XXXXXXXXXXXX} \\Device\\NPF_{E1C9B06F-C22E-XXXX-XXXX-XXXXXXXXXXXX}
+  -b, --buddyip IP IP     Space-separated list of your teammates IP addresses.
                           Usually statically assigned in Wireguard/OpenVPN configuration.
                           Example: --buddyip 10.2.0.5 10.2.0.6 10.2.0.9 10.2.0.15
 ";
 
+struct ParsedDevices<'v> {
+    src: Option<&'v Device>,
+    dst: Vec<&'v Device>,
+    virt: Vec<&'v Device>,
+}
+
 #[derive(Debug)]
 struct Arguments {
     _srcdev: Option<String>,
+    dstdevs: Vec<String>,
     buddyip: Vec<Ipv4Addr>,
 }
 
 /// Parse command line arguments
-fn parse_args(devs: &[Device]) -> Result<Arguments, String> {
+fn parse_args() -> Result<Arguments, String> {
     use lexopt::prelude::*;
 
     let max_verbosity = 3u8;
 
     let mut srcdev: Option<String> = None;
+    let mut dstdevs: Vec<String> = Vec::new();
     let mut buddyip: Vec<Ipv4Addr> = Vec::new();
 
     let mut parser = lexopt::Parser::from_env();
@@ -68,8 +80,21 @@ fn parse_args(devs: &[Device]) -> Result<Arguments, String> {
                     .map_err(|e| e.to_string())?
                     .string()
                     .map_err(|e| format!("Invalid device name {:?}.", e))?;
-                // TODO: verify device pattern
+                if !s.starts_with("\\Device\\NPF_{") || !s.ends_with("}") {
+                    return Err(format!("Invalid device name {}.", s));
+                }
                 srcdev = Some(s);
+            }
+            Short('d') | Long("dstdevs") => {
+                for d in parser.values().map_err(|e| e.to_string())? {
+                    let s = d
+                        .string()
+                        .map_err(|e| format!("Invalid device name {:?}.", e))?;
+                    if !s.starts_with("\\Device\\NPF_{") || !s.ends_with("}") {
+                        return Err(format!("Invalid device name {}.", s));
+                    }
+                    dstdevs.push(s);
+                }
             }
             Short('b') | Long("buddyip") => {
                 for ipstr in parser.values().map_err(|e| e.to_string())? {
@@ -84,9 +109,13 @@ fn parse_args(devs: &[Device]) -> Result<Arguments, String> {
                 println!("{}", HELP);
                 std::process::exit(0);
             }
-            Short('d') | Long("devices") => {
-                print_devices(devs);
+            Long("devices") => {
+                let devs: Vec<Device> = get_promising_devices()?;
+                print_devices(&devs);
                 std::process::exit(0);
+            }
+            Long("monochrome") => {
+                crate::logger::set_monochrome();
             }
             _ => return Err("Unexpected command line option.".to_string()),
         }
@@ -94,14 +123,9 @@ fn parse_args(devs: &[Device]) -> Result<Arguments, String> {
 
     Ok(Arguments {
         _srcdev: srcdev,
+        dstdevs,
         buddyip,
     })
-}
-
-struct ParsedDevices<'v> {
-    src: Option<&'v Device>,
-    dst: Vec<&'v Device>,
-    virt: Vec<&'v Device>,
 }
 
 /// Get list of all network adapters and filter out useless.
@@ -198,11 +222,24 @@ fn verify_devices<'r>(pd: &'r ParsedDevices) -> Result<&'r Device, String> {
 }
 
 fn print_devices(devs: &[Device]) {
-    println!("Devices:");
+    if crate::logger::is_monochrome() {
+        println!(
+            "Network adapter name                                IP address       Description"
+        );
+    } else {
+        println!("\x1b[32mNetwork adapter name                                IP address       Description\x1b[0m");
+    }
     for dev in devs {
-        println!("{0}\t{1}", dev.name, dev.desc.clone().unwrap_or_default());
-        for a in &dev.addresses {
-            println!("\t{0}", a.addr);
+        let ip_opt: &Option<&Address> = &dev.addresses.iter().find(|a| a.addr.is_ipv4());
+        if let Some(ip) = ip_opt {
+            let row = format!(
+                "{0}  {1:W$}  {2}",
+                dev.name,
+                ip.addr.to_string(),
+                dev.desc.clone().unwrap_or_default(),
+                W = 15
+            );
+            println!("{}", row);
         }
     }
 }
@@ -242,12 +279,12 @@ fn ip4_checksum() {
 }
 
 fn main() -> Result<(), String> {
-    let devs: Vec<Device> = get_promising_devices()?;
-    let args: Arguments = parse_args(&devs)?;
+    let args: Arguments = parse_args()?;
 
     debug!("{:?}", args);
 
     // TODO: CLI option to disable this heuristic
+    let devs: Vec<Device> = get_promising_devices()?;
     let split_devices: ParsedDevices = split_to_src_and_dst(&devs);
     // TODO: more granular verification
     let src_dev: &Device = verify_devices(&split_devices)?;

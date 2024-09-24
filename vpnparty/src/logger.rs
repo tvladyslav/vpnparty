@@ -2,16 +2,29 @@
 
 /// Start from 3, this way warn, err and critical are always on.
 pub static mut VERBOSITY: u8 = 3;
+pub static mut MONOCHROME: bool = false;
 
 /// Increase verbosity level
 pub fn set_verbosity(verbosity: u8) {
     unsafe { VERBOSITY += verbosity };
 }
 
+pub fn set_monochrome() {
+    unsafe { MONOCHROME = true };
+}
+
+pub fn is_monochrome() -> bool {
+    unsafe { MONOCHROME }
+}
+
 #[macro_export]
 macro_rules! critical {
     ($($arg:tt)+) => (if unsafe {$crate::logger::VERBOSITY} > 0 {
-        eprint!("\x1b[31mError:\x1b[0m ");
+        if $crate::logger::is_monochrome() {
+            eprint!("Error: ");
+        } else {
+            eprint!("\x1b[31mError:\x1b[0m ");
+        }
         eprintln!($($arg)+);
     })
 }
@@ -19,7 +32,11 @@ macro_rules! critical {
 #[macro_export]
 macro_rules! error {
     ($($arg:tt)+) => (if unsafe {$crate::logger::VERBOSITY} > 1 {
-        eprint!("\x1b[31mError:\x1b[0m ");
+        if $crate::logger::is_monochrome() {
+            eprint!("Error: ");
+        } else {
+            eprint!("\x1b[31mError:\x1b[0m ");
+        }
         eprintln!($($arg)+);
     })
 }
@@ -27,7 +44,11 @@ macro_rules! error {
 #[macro_export]
 macro_rules! warn {
     ($($arg:tt)+) => (if unsafe {$crate::logger::VERBOSITY} > 2 {
-        print!("\x1b[93mWarning:\x1b[0m ");
+        if $crate::logger::is_monochrome() {
+            eprint!("Warning: ");
+        } else {
+            eprint!("\x1b[93mWarning:\x1b[0m ");
+        }
         println!($($arg)+);
     })
 }
