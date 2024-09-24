@@ -1,7 +1,6 @@
-use clap::{ArgAction, Parser};
 use pcap::{Active, Capture, ConnectionStatus, Device};
-use std::io::ErrorKind;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
+use std::str::FromStr;
 use std::vec::Vec;
 
 mod logger;
@@ -17,10 +16,86 @@ const HW_NAMES: [&str; 16] = [
     "QLogic", "Ralink",
 ];
 
-#[derive(Parser, Default, Debug)]
+const HELP: &str = "\
+vpnparty is a next gen LAN party.
+
+USAGE:
+  vpnparty [FLAGS] [OPTIONS]
+
+FLAGS:
+  -h, --help              Prints help information
+  -d, --devices           List available network devices
+
+OPTIONS:
+  -v, --verbose  NUMBER   Verbosity level [0-3].
+  -s, --srcdev   NAME     Name of the device, which receives broadcast packets.
+                          Usually this is your Ethernet or Wi-Fi adapter, but might be a Hyper-V Virtual adapter.
+                          Example: --srcdev=\\Device\\NPF_{D0B8AF5E-B11D-XXXX-XXXX-XXXXXXXXXXXX}
+  -b, --buddyip  IP IP    Space-separated list of your teammates IP addresses.
+                          Usually statically assigned in Wireguard/OpenVPN configuration.
+                          Example: --buddyip 10.2.0.5 10.2.0.6 10.2.0.9 10.2.0.15
+";
+
+#[derive(Debug)]
 struct Arguments {
-    #[clap(short = 'v', long = "verbose", action = ArgAction::Count)]
-    verbosity: u8,
+    _srcdev: Option<String>,
+    buddyip: Vec<Ipv4Addr>,
+}
+
+/// Parse command line arguments
+fn parse_args(devs: &[Device]) -> Result<Arguments, String> {
+    use lexopt::prelude::*;
+
+    let max_verbosity = 3u8;
+
+    let mut srcdev: Option<String> = None;
+    let mut buddyip: Vec<Ipv4Addr> = Vec::new();
+
+    let mut parser = lexopt::Parser::from_env();
+    while let Some(arg) = parser.next().map_err(|e| e.to_string())? {
+        match arg {
+            Short('v') | Long("verbose") => {
+                let verbosity: u8 = parser
+                    .value()
+                    .map_err(|e| e.to_string())?
+                    .parse::<u8>()
+                    .map_err(|e| e.to_string())?;
+                logger::set_verbosity(std::cmp::min(verbosity, max_verbosity));
+            }
+            Short('s') | Long("srcdev") => {
+                let s = parser
+                    .value()
+                    .map_err(|e| e.to_string())?
+                    .string()
+                    .map_err(|e| format!("Invalid device name {:?}.", e))?;
+                // TODO: verify device pattern
+                srcdev = Some(s);
+            }
+            Short('b') | Long("buddyip") => {
+                for ipstr in parser.values().map_err(|e| e.to_string())? {
+                    let s = ipstr
+                        .string()
+                        .map_err(|e| format!("Failed to parse an IP address {:?}", e))?;
+                    let a = Ipv4Addr::from_str(&s).map_err(|e| e.to_string())?;
+                    buddyip.push(a);
+                }
+            }
+            Short('h') | Long("help") => {
+                println!("{}", HELP);
+                std::process::exit(0);
+            }
+            Short('d') | Long("devices") => {
+                print_devices(devs);
+                std::process::exit(0);
+            }
+            _ => return Err("Unexpected command line option.".to_string()),
+        }
+    }
+
+    Ok(Arguments {
+        _srcdev: srcdev,
+        buddyip,
+    })
 }
 
 struct ParsedDevices<'v> {
@@ -30,8 +105,8 @@ struct ParsedDevices<'v> {
 }
 
 /// Get list of all network adapters and filter out useless.
-fn get_promising_devices() -> Result<Vec<Device>, pcap::Error> {
-    let devs = pcap::Device::list()?;
+fn get_promising_devices() -> Result<Vec<Device>, String> {
+    let devs = pcap::Device::list().map_err(|e| e.to_string())?;
     let filtered = devs
         .into_iter()
         .filter(|d| {
@@ -85,7 +160,7 @@ fn split_to_src_and_dst(full_list: &[Device]) -> ParsedDevices {
     ParsedDevices { src, dst, virt }
 }
 
-fn verify_devices<'r>(pd: &'r ParsedDevices) -> Result<&'r Device, pcap::Error> {
+fn verify_devices<'r>(pd: &'r ParsedDevices) -> Result<&'r Device, String> {
     if !pd.virt.is_empty() {
         warn!("There are active virtual network adapters in your system.");
         warn!("To prevent troubles either disable virtual adapters or specify the correct HW adapter via command line.");
@@ -106,15 +181,16 @@ fn verify_devices<'r>(pd: &'r ParsedDevices) -> Result<&'r Device, pcap::Error> 
         // This is just a warning, continue execution and hope for best.
     }
     if pd.dst.is_empty() {
-        critical!("Can't find your VPN connection.");
-        critical!("Please specify it manually via CLI.");
-        return Err(pcap::Error::IoError(ErrorKind::NotFound));
+        return Err(
+            "Can't find your VPN connection. Please specify it manually via CLI.".to_string(),
+        );
     }
     let src_dev = match pd.src {
         None => {
-            critical!("Can't find your HW network adapter.");
-            critical!("Please specify it manually via CLI.");
-            return Err(pcap::Error::IoError(ErrorKind::NotFound));
+            return Err(
+                "Can't find your HW network adapter. Please specify it manually via CLI."
+                    .to_string(),
+            );
         }
         Some(s) => s,
     };
@@ -122,18 +198,18 @@ fn verify_devices<'r>(pd: &'r ParsedDevices) -> Result<&'r Device, pcap::Error> 
 }
 
 fn print_devices(devs: &[Device]) {
-    info!("Devices:");
+    println!("Devices:");
     for dev in devs {
-        info!("{0}\t{1}", dev.name, dev.desc.clone().unwrap_or_default());
+        println!("{0}\t{1}", dev.name, dev.desc.clone().unwrap_or_default());
         for a in &dev.addresses {
-            info!("\t{0}", a.addr);
+            println!("\t{0}", a.addr);
         }
     }
 }
 
-fn rewrite_ip4_checksum(buf: &mut [u8]) -> Result<(), pcap::Error> {
+fn rewrite_ip4_checksum(buf: &mut [u8]) -> Result<(), String> {
     if buf.len() != 20 {
-        return Err(pcap::Error::IoError(ErrorKind::Other));
+        return Err("Incorrect packet header length.".to_string());
     }
     buf[10] = 0u8;
     buf[11] = 0u8;
@@ -165,26 +241,28 @@ fn ip4_checksum() {
     assert_eq!(given_checksum, expected_checksum);
 }
 
-fn main() -> Result<(), pcap::Error> {
-    let args = Arguments::parse();
-    logger::set_verbosity(args.verbosity);
+fn main() -> Result<(), String> {
+    let devs: Vec<Device> = get_promising_devices()?;
+    let args: Arguments = parse_args(&devs)?;
 
     debug!("{:?}", args);
 
-    let devs: Vec<Device> = get_promising_devices()?;
-    print_devices(&devs);
-
     // TODO: CLI option to disable this heuristic
     let split_devices: ParsedDevices = split_to_src_and_dst(&devs);
+    // TODO: more granular verification
     let src_dev: &Device = verify_devices(&split_devices)?;
 
     // Setup Capture
     // TODO: capture virtual devices as well?
-    let mut hw_cap = pcap::Capture::from_device(src_dev.clone())?
+    let mut hw_cap = pcap::Capture::from_device(src_dev.clone())
+        .map_err(|e| e.to_string())?
         .immediate_mode(true)
-        .open()?;
+        .open()
+        .map_err(|e| e.to_string())?;
 
-    hw_cap.filter("dst 255.255.255.255 and udp", true)?;
+    hw_cap
+        .filter("dst 255.255.255.255 and udp", true)
+        .map_err(|e| e.to_string())?;
 
     // For weirdos with multiple active VPNs
     let num_of_vpns = split_devices.dst.len();
@@ -192,7 +270,10 @@ fn main() -> Result<(), pcap::Error> {
     // Open all destination devices
     let mut vpn_ipv4_cap: Vec<([u8; 4], Capture<Active>)> = Vec::with_capacity(num_of_vpns);
     for vpn in &split_devices.dst {
-        let v = pcap::Capture::from_device((*vpn).clone())?.open()?;
+        let v = pcap::Capture::from_device((*vpn).clone())
+            .map_err(|e| e.to_string())?
+            .open()
+            .map_err(|e| e.to_string())?;
         if let IpAddr::V4(ip4) = vpn.addresses[0].addr {
             vpn_ipv4_cap.push((ip4.octets(), v));
         } else {
@@ -226,19 +307,26 @@ fn main() -> Result<(), pcap::Error> {
             // Rewrite source and destination IPs
             no_ether_pktbuf.copy_from_slice(&packet.data[14..]);
             no_ether_pktbuf[12..16].copy_from_slice(ip4);
-            no_ether_pktbuf[16..20].copy_from_slice(&[10, 0, 0, 2]); //TODO!!!
 
-            if rewrite_ip4_checksum(&mut no_ether_pktbuf[0..20]).is_err() {
-                critical!("Should never happen! Checksum calculation error.");
-                continue;
-            }
+            //TODO: use only IPs that belongs to this device
+            for dstip in &args.buddyip {
+                if *ip4 == dstip.octets() {
+                    // TODO: Come ON!!!
+                }
+                no_ether_pktbuf[16..20].copy_from_slice(&dstip.octets());
 
-            //TODO: UDP checksum (optional)
+                if rewrite_ip4_checksum(&mut no_ether_pktbuf[0..20]).is_err() {
+                    critical!("Should never happen! Checksum calculation error.");
+                    continue;
+                }
 
-            trace!("{:?}", no_ether_pktbuf);
+                //TODO: UDP checksum (optional)
 
-            if let Err(e) = vcap.sendpacket(no_ether_pktbuf) {
-                error!("Error while resending packet: {}", e);
+                trace!("{:?}", no_ether_pktbuf);
+
+                if let Err(e) = vcap.sendpacket(&mut *no_ether_pktbuf) {
+                    error!("Error while resending packet: {}", e);
+                }
             }
         }
     }
