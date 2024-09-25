@@ -53,6 +53,12 @@ struct Arguments {
     buddyip: Vec<Ipv4Addr>,
 }
 
+/// Macro to cast any error type to String
+/// //TODO: verify
+macro_rules! e {
+    ($($arg:tt)+) => ($($arg)+.map_err(|e| e.to_string())?)
+}
+
 /// Parse command line arguments
 fn parse_args() -> Result<Arguments, String> {
     use lexopt::prelude::*;
@@ -64,32 +70,22 @@ fn parse_args() -> Result<Arguments, String> {
     let mut buddyip: Vec<Ipv4Addr> = Vec::new();
 
     let mut parser = lexopt::Parser::from_env();
-    while let Some(arg) = parser.next().map_err(|e| e.to_string())? {
+    while let Some(arg) = e!(parser.next()) {
         match arg {
             Short('v') | Long("verbose") => {
-                let verbosity: u8 = parser
-                    .value()
-                    .map_err(|e| e.to_string())?
-                    .parse::<u8>()
-                    .map_err(|e| e.to_string())?;
+                let verbosity: u8 = e!(e!(parser.value()).parse::<u8>());
                 logger::set_verbosity(std::cmp::min(verbosity, max_verbosity));
             }
             Short('s') | Long("srcdev") => {
-                let s = parser
-                    .value()
-                    .map_err(|e| e.to_string())?
-                    .string()
-                    .map_err(|e| format!("Invalid device name {:?}.", e))?;
+                let s = e!(e!(parser.value()).string());
                 if !s.starts_with("\\Device\\NPF_{") || !s.ends_with("}") {
                     return Err(format!("Invalid device name {}.", s));
                 }
                 srcdev = Some(s);
             }
             Short('d') | Long("dstdevs") => {
-                for d in parser.values().map_err(|e| e.to_string())? {
-                    let s = d
-                        .string()
-                        .map_err(|e| format!("Invalid device name {:?}.", e))?;
+                for d in e!(parser.values()) {
+                    let s = e!(d.string());
                     if !s.starts_with("\\Device\\NPF_{") || !s.ends_with("}") {
                         return Err(format!("Invalid device name {}.", s));
                     }
@@ -97,11 +93,9 @@ fn parse_args() -> Result<Arguments, String> {
                 }
             }
             Short('b') | Long("buddyip") => {
-                for ipstr in parser.values().map_err(|e| e.to_string())? {
-                    let s = ipstr
-                        .string()
-                        .map_err(|e| format!("Failed to parse an IP address {:?}", e))?;
-                    let a = Ipv4Addr::from_str(&s).map_err(|e| e.to_string())?;
+                for ipstr in e!(parser.values()) {
+                    let s = e!(ipstr.string());
+                    let a = e!(Ipv4Addr::from_str(&s));
                     buddyip.push(a);
                 }
             }
@@ -117,7 +111,7 @@ fn parse_args() -> Result<Arguments, String> {
             Long("monochrome") => {
                 crate::logger::set_monochrome();
             }
-            _ => return Err("Unexpected command line option.".to_string()),
+            _ => return Err(format!("Unexpected command line option {:?}.", arg)),
         }
     }
 
@@ -130,7 +124,7 @@ fn parse_args() -> Result<Arguments, String> {
 
 /// Get list of all network adapters and filter out useless.
 fn get_promising_devices() -> Result<Vec<Device>, String> {
-    let devs = pcap::Device::list().map_err(|e| e.to_string())?;
+    let devs = e!(pcap::Device::list());
     let filtered = devs
         .into_iter()
         .filter(|d| {
@@ -291,15 +285,11 @@ fn main() -> Result<(), String> {
 
     // Setup Capture
     // TODO: capture virtual devices as well?
-    let mut hw_cap = pcap::Capture::from_device(src_dev.clone())
-        .map_err(|e| e.to_string())?
+    let mut hw_cap = e!(e!(pcap::Capture::from_device(src_dev.clone()))
         .immediate_mode(true)
-        .open()
-        .map_err(|e| e.to_string())?;
+        .open());
 
-    hw_cap
-        .filter("dst 255.255.255.255 and udp", true)
-        .map_err(|e| e.to_string())?;
+    e!(hw_cap.filter("dst 255.255.255.255 and udp", true));
 
     // For weirdos with multiple active VPNs
     let num_of_vpns = split_devices.dst.len();
@@ -307,10 +297,7 @@ fn main() -> Result<(), String> {
     // Open all destination devices
     let mut vpn_ipv4_cap: Vec<([u8; 4], Capture<Active>)> = Vec::with_capacity(num_of_vpns);
     for vpn in &split_devices.dst {
-        let v = pcap::Capture::from_device((*vpn).clone())
-            .map_err(|e| e.to_string())?
-            .open()
-            .map_err(|e| e.to_string())?;
+        let v = e!(e!(pcap::Capture::from_device((*vpn).clone())).open());
         if let IpAddr::V4(ip4) = vpn.addresses[0].addr {
             vpn_ipv4_cap.push((ip4.octets(), v));
         } else {
