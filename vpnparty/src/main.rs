@@ -28,27 +28,35 @@ FLAGS:
   --monochrome            Don't use colors in output
 
 OPTIONS:
-  -v, --verbose  NUMBER   Verbosity level [0-3].
-  -s, --srcdev   NAME     Name of the device, which receives broadcast packets.
-                          Usually this is your Ethernet or Wi-Fi adapter, but might be a Hyper-V Virtual adapter.
-                          Example: --srcdev=\\Device\\NPF_{D0B8AF5E-B11D-XXXX-XXXX-XXXXXXXXXXXX}
-  -d, --dstdevs NAME NAME Space-separated list of your VPN connection devices.
-                          Supported VPNs are Wireguard and OpenVPN, altough other should work as well.
-                          Example --dstdevs \\Device\\NPF_{CFB8AF5E-A00C-XXXX-XXXX-XXXXXXXXXXXX} \\Device\\NPF_{E1C9B06F-C22E-XXXX-XXXX-XXXXXXXXXXXX}
-  -b, --buddyip IP IP     Space-separated list of your teammates IP addresses.
-                          Usually statically assigned in Wireguard/OpenVPN configuration.
-                          Example: --buddyip 10.2.0.5 10.2.0.6 10.2.0.9 10.2.0.15
+  -v, --verbose  NUMBER        Verbosity level [0-3].
+  -s, --srcdev   \"NAME\"        Name of the device, which receives broadcast packets.
+                               Usually this is your Ethernet or Wi-Fi adapter, but might be a Hyper-V Virtual adapter.
+                               Example: --srcdev=\"\\Device\\NPF_{D0B8AF5E-B11D-XXXX-XXXX-XXXXXXXXXXXX}\"
+  -d, --dstdevs \"NAME\" \"NAME\"  Space-separated list of your VPN connection devices.
+                               Supported VPNs are Wireguard and OpenVPN, altough other should work as well.
+                               Example --dstdevs \"\\Device\\NPF_{CFB8AF5E-A00C-XXXX-XXXX-XXXXXXXXXXXX}\" \"\\Device\\NPF_{E1C9B06F-C22E-XXXX-XXXX-XXXXXXXXXXXX}\"
+  -b, --buddyip IP IP          Space-separated list of your teammates IP addresses.
+                               Usually statically assigned in Wireguard/OpenVPN configuration.
+                               Example: --buddyip 10.2.0.5 10.2.0.6 10.2.0.9 10.2.0.15
 ";
 
-struct ParsedDevices<'v> {
-    src: Option<&'v Device>,
-    dst: Vec<&'v Device>,
-    virt: Vec<&'v Device>,
+/// Devices that are parsed by internal heuristic, may be overridden by user
+struct PromisingDevices {
+    src: Option<Device>,
+    dst: Vec<Device>,
+    virt: Vec<Device>,
+}
+
+/// Verified and ready-to-go devices
+#[derive(Debug)]
+struct ParsedDevices {
+    src: Device,
+    dst: Vec<Device>,
 }
 
 #[derive(Debug)]
 struct Arguments {
-    _srcdev: Option<String>,
+    srcdev: Option<String>,
     dstdevs: Vec<String>,
     buddyip: Vec<Ipv4Addr>,
 }
@@ -64,6 +72,7 @@ fn parse_args() -> Result<Arguments, String> {
     use lexopt::prelude::*;
 
     let max_verbosity = 3u8;
+    let dev_name_len = 50;
 
     let mut srcdev: Option<String> = None;
     let mut dstdevs: Vec<String> = Vec::new();
@@ -78,7 +87,8 @@ fn parse_args() -> Result<Arguments, String> {
             }
             Short('s') | Long("srcdev") => {
                 let s = e!(e!(parser.value()).string());
-                if !s.starts_with("\\Device\\NPF_{") || !s.ends_with("}") {
+                if !s.starts_with("\\Device\\NPF_{") || !s.ends_with("}") || s.len() != dev_name_len
+                {
                     return Err(format!("Invalid device name {}.", s));
                 }
                 srcdev = Some(s);
@@ -86,7 +96,10 @@ fn parse_args() -> Result<Arguments, String> {
             Short('d') | Long("dstdevs") => {
                 for d in e!(parser.values()) {
                     let s = e!(d.string());
-                    if !s.starts_with("\\Device\\NPF_{") || !s.ends_with("}") {
+                    if !s.starts_with("\\Device\\NPF_{")
+                        || !s.ends_with("}")
+                        || s.len() != dev_name_len
+                    {
                         return Err(format!("Invalid device name {}.", s));
                     }
                     dstdevs.push(s);
@@ -116,7 +129,7 @@ fn parse_args() -> Result<Arguments, String> {
     }
 
     Ok(Arguments {
-        _srcdev: srcdev,
+        srcdev,
         dstdevs,
         buddyip,
     })
@@ -155,64 +168,29 @@ where
     false
 }
 
-/// Decide which device provides broadcast packets and which needs them
-fn split_to_src_and_dst(full_list: &[Device]) -> ParsedDevices {
-    let dst: Vec<&Device> = full_list
+/// Consume devices and decide which device provides broadcast packets and which needs them
+fn split_to_src_and_dst(full_list: Vec<Device>) -> PromisingDevices {
+    let dst: Vec<Device> = full_list
         .iter()
         .filter(|d| contains(d, VPN_NAMES))
+        .cloned()
         .collect();
-    let virt: Vec<&Device> = full_list
+    let virt: Vec<Device> = full_list
         .iter()
         .filter(|d| contains(d, VIRT_NAMES))
+        .cloned()
         .collect();
-    let src: Option<&Device> = full_list.iter().find(|d| contains(d, HW_NAMES));
+    let src: Option<Device> = full_list.iter().find(|d| contains(d, HW_NAMES)).cloned();
     if src.is_none() {
-        let guess = full_list.iter().find(|d| !contains(d, VPN_NAMES));
-        return ParsedDevices {
+        let guess = full_list.iter().find(|d| !contains(d, VPN_NAMES)).cloned();
+        return PromisingDevices {
             src: guess,
             dst,
             virt,
         };
     }
 
-    ParsedDevices { src, dst, virt }
-}
-
-fn verify_devices<'r>(pd: &'r ParsedDevices) -> Result<&'r Device, String> {
-    if !pd.virt.is_empty() {
-        warn!("There are active virtual network adapters in your system.");
-        warn!("To prevent troubles either disable virtual adapters or specify the correct HW adapter via command line.");
-        warn!("Here are PowerShell commands (run as Administrator):");
-        for vd in &pd.virt {
-            warn!(
-                "\tDisable-NetAdapter -InterfaceDescription  \"{}\"",
-                vd.desc.clone().unwrap()
-            );
-        }
-        warn!("Feel free to enable them back using following PowerShell commands:");
-        for vd in &pd.virt {
-            warn!(
-                "\tEnable-NetAdapter -InterfaceDescription  \"{}\"",
-                vd.desc.clone().unwrap()
-            );
-        }
-        // This is just a warning, continue execution and hope for best.
-    }
-    if pd.dst.is_empty() {
-        return Err(
-            "Can't find your VPN connection. Please specify it manually via CLI.".to_string(),
-        );
-    }
-    let src_dev = match pd.src {
-        None => {
-            return Err(
-                "Can't find your HW network adapter. Please specify it manually via CLI."
-                    .to_string(),
-            );
-        }
-        Some(s) => s,
-    };
-    Ok(src_dev)
+    PromisingDevices { src, dst, virt }
 }
 
 fn print_devices(devs: &[Device]) {
@@ -272,31 +250,103 @@ fn ip4_checksum() {
     assert_eq!(given_checksum, expected_checksum);
 }
 
+fn show_virt_dev_warning(virt: &[Device]) {
+    if !virt.is_empty() {
+        warn!("There are active virtual network adapters in your system.");
+        warn!("To prevent troubles either disable virtual adapters or specify the correct HW adapter via command line.");
+        warn!("Here are PowerShell commands (run as Administrator):");
+        for vd in virt {
+            warn!(
+                "\tDisable-NetAdapter -InterfaceDescription  \"{}\"",
+                vd.desc.clone().unwrap()
+            );
+        }
+        warn!("Feel free to enable them back using following PowerShell commands:");
+        for vd in virt {
+            warn!(
+                "\tEnable-NetAdapter -InterfaceDescription  \"{}\"",
+                vd.desc.clone().unwrap()
+            );
+        }
+    }
+}
+
+/// Verify CLI arguments. Fill gaps.
+fn get_devices(a: &Arguments) -> Result<ParsedDevices, String> {
+    let devs: Vec<Device> = get_promising_devices()?;
+    let split_devices: PromisingDevices = split_to_src_and_dst(devs.clone());
+    show_virt_dev_warning(&split_devices.virt);
+
+    let src: Device = match &a.srcdev {
+        // No src device specified in CLI, let's do our best to find some in our list
+        None => split_devices.src.ok_or(
+            "Can't find your HW network adapter. Please specify it manually via CLI.".to_string(),
+        )?,
+
+        // User specified an adapter via CLI, let's find it in our list
+        Some(name) => devs
+            .iter()
+            .find(|d| d.name == *name)
+            .ok_or(format!("Can't find {} network adapter.", name))?
+            .clone(),
+    };
+
+    let dst: Vec<Device> = if a.dstdevs.is_empty() {
+        if split_devices.dst.is_empty() {
+            return Err(
+                "Can't find your VPN connection. Please specify it manually via CLI.".to_string(),
+            );
+        } else {
+            split_devices.dst
+        }
+    } else {
+        let result: Vec<Device> = devs
+            .iter()
+            .filter_map(|d| {
+                for v in &a.dstdevs {
+                    if d.name == *v {
+                        return Some(d.clone());
+                    }
+                }
+                None
+            })
+            .collect();
+        if result.len() != a.dstdevs.len() {
+            error!("Can't find all provided VPN devices.");
+            if !result.is_empty() {
+                error!("Devices, which are found:");
+                for r in result {
+                    error!("\t{}", r.name);
+                }
+            }
+            return Err("VPN devices not found.".to_string());
+        } else {
+            result
+        }
+    };
+    Ok(ParsedDevices { src, dst })
+}
+
 fn main() -> Result<(), String> {
     let args: Arguments = parse_args()?;
-
     debug!("{:?}", args);
 
-    // TODO: CLI option to disable this heuristic
-    let devs: Vec<Device> = get_promising_devices()?;
-    let split_devices: ParsedDevices = split_to_src_and_dst(&devs);
-    // TODO: more granular verification
-    let src_dev: &Device = verify_devices(&split_devices)?;
+    let devices: ParsedDevices = get_devices(&args)?;
+    debug!("{:?}", devices);
 
     // Setup Capture
-    // TODO: capture virtual devices as well?
-    let mut hw_cap = e!(e!(pcap::Capture::from_device(src_dev.clone()))
+    let mut hw_cap = e!(e!(pcap::Capture::from_device(devices.src))
         .immediate_mode(true)
         .open());
 
     e!(hw_cap.filter("dst 255.255.255.255 and udp", true));
 
     // For weirdos with multiple active VPNs
-    let num_of_vpns = split_devices.dst.len();
+    let num_of_vpns = devices.dst.len();
 
     // Open all destination devices
     let mut vpn_ipv4_cap: Vec<([u8; 4], Capture<Active>)> = Vec::with_capacity(num_of_vpns);
-    for vpn in &split_devices.dst {
+    for vpn in &devices.dst {
         let v = e!(e!(pcap::Capture::from_device((*vpn).clone())).open());
         if let IpAddr::V4(ip4) = vpn.addresses[0].addr {
             vpn_ipv4_cap.push((ip4.octets(), v));
@@ -317,7 +367,7 @@ fn main() -> Result<(), String> {
             }
         };
 
-        if packet.header.len < 42 {
+        if packet.header.len <= 42 {
             error!("This packet is empty, skipping.");
             continue;
         }
