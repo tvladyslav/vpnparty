@@ -327,6 +327,11 @@ fn get_devices(a: &Arguments) -> Result<ParsedDevices, String> {
     Ok(ParsedDevices { src, dst })
 }
 
+/// Check whether ip belongs to the given network
+// fn belongs(ip: Ipv4Addr, net: Address) -> bool {
+
+// }
+
 fn main() -> Result<(), String> {
     let args: Arguments = parse_args()?;
     debug!("{:?}", args);
@@ -345,17 +350,25 @@ fn main() -> Result<(), String> {
     let num_of_vpns = devices.dst.len();
 
     // Open all destination devices
-    let mut vpn_ipv4_cap: Vec<([u8; 4], Capture<Active>)> = Vec::with_capacity(num_of_vpns);
+    let mut vpn_ipv4_cap: Vec<(Ipv4Addr, Capture<Active>)> = Vec::with_capacity(num_of_vpns);
     for vpn in &devices.dst {
         let v = e!(e!(pcap::Capture::from_device((*vpn).clone())).open());
         if let IpAddr::V4(ip4) = vpn.addresses[0].addr {
-            vpn_ipv4_cap.push((ip4.octets(), v));
+            vpn_ipv4_cap.push((ip4, v));
         } else {
             critical!("Error: IPv6 VPN address is not supported here.")
         }
     }
 
     //TODO: network discovery for computers on the other side of VPN
+
+    // Check for intersection between buddy and own IPs
+    for (ip4, _) in &vpn_ipv4_cap {
+        if args.buddyip.contains(ip4) {
+            error!("You specified {} as buddy address but it is actually your address.", ip4);
+            return Err(format!("Wrong buddy address {}", ip4));
+        }
+    }
 
     // No panics, unwraps or "?" in this loop. Report failures and proceed to next packet.
     loop {
@@ -380,13 +393,10 @@ fn main() -> Result<(), String> {
 
             // Rewrite source and destination IPs
             no_ether_pktbuf.copy_from_slice(&packet.data[14..]);
-            no_ether_pktbuf[12..16].copy_from_slice(ip4);
+            no_ether_pktbuf[12..16].copy_from_slice(&ip4.octets());
 
             //TODO: use only IPs that belongs to this device
             for dstip in &args.buddyip {
-                if *ip4 == dstip.octets() {
-                    // TODO: Come ON!!!
-                }
                 no_ether_pktbuf[16..20].copy_from_slice(&dstip.octets());
 
                 if rewrite_ip4_checksum(&mut no_ether_pktbuf[0..20]).is_err() {
