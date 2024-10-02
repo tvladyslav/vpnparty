@@ -340,7 +340,7 @@ fn main() -> Result<(), String> {
     debug!("{:?}", devices);
 
     // Setup Capture
-    let mut hw_cap = e!(e!(pcap::Capture::from_device(devices.src))
+    let mut hw_cap = e!(e!(pcap::Capture::from_device(devices.src.clone()))
         .immediate_mode(true)
         .open());
 
@@ -365,6 +365,12 @@ fn main() -> Result<(), String> {
     // Check for intersection between buddy and own IPs
     for (ip4, _) in &vpn_ipv4_cap {
         if args.buddyip.contains(ip4) {
+            error!("You specified {} as buddy address but it is actually your address.", ip4);
+            return Err(format!("Wrong buddy address {}", ip4));
+        }
+    }
+    if let IpAddr::V4(ip4) = &(&devices.src).addresses[0].addr {
+        if args.buddyip.contains(&ip4) {
             error!("You specified {} as buddy address but it is actually your address.", ip4);
             return Err(format!("Wrong buddy address {}", ip4));
         }
