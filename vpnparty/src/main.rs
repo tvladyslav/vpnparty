@@ -145,11 +145,6 @@ fn get_promising_devices() -> Result<Vec<Device>, String> {
                 && !d.flags.is_loopback()
                 && !d.addresses.is_empty()
                 && d.flags.connection_status == ConnectionStatus::Connected
-                && !d
-                    .desc
-                    .as_ref()
-                    .unwrap_or(&String::new())
-                    .contains("VirtualBox") // TODO: test
         })
         .collect();
     Ok(filtered)
