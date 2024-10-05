@@ -1,5 +1,6 @@
 use pcap::{Active, Address, Capture, ConnectionStatus, Device};
 use std::net::{IpAddr, Ipv4Addr};
+use std::ops::BitAnd;
 use std::str::FromStr;
 use std::vec::Vec;
 
@@ -54,10 +55,18 @@ struct ParsedDevices {
     dst: Vec<Device>,
 }
 
+/// Command line arguments
 #[derive(Debug)]
 struct Arguments {
     srcdev: Option<String>,
     dstdevs: Vec<String>,
+    buddyip: Vec<Ipv4Addr>,
+}
+
+/// VPN device and related destination IPs
+struct Direction {
+    vpnip: Ipv4Addr,
+    vpncap: Capture<Active>,
     buddyip: Vec<Ipv4Addr>,
 }
 
@@ -322,10 +331,80 @@ fn get_devices(a: &Arguments) -> Result<ParsedDevices, String> {
     Ok(ParsedDevices { src, dst })
 }
 
-/// Check whether ip belongs to the given network
-// fn belongs(ip: Ipv4Addr, net: Address) -> bool {
+/// Open all destination devices
+fn open_dst_devices(
+    devices: ParsedDevices,
+    buddyip_slice: &[Ipv4Addr],
+) -> Result<Vec<Direction>, String> {
+    if let IpAddr::V4(ip4) = &devices.src.addresses[0].addr {
+        if buddyip_slice.contains(ip4) {
+            critical!(
+                "You specified {} as buddy address but it is actually your address.",
+                ip4
+            );
+            return Err(format!("Wrong buddy address {}", ip4));
+        }
+    }
 
-// }
+    let mut buddyip: Vec<Ipv4Addr> = buddyip_slice.to_vec();
+
+    // For weirdos with multiple active VPNs
+    let num_of_vpns = devices.dst.len();
+    let mut vpn_ipv4_cap: Vec<Direction> = Vec::with_capacity(num_of_vpns);
+    for vpn in &devices.dst {
+        let addresses = &vpn.addresses[0];
+        if let IpAddr::V4(ip4) = addresses.addr {
+            // TODO: hardcode here because my Wireguard provides 255.255.255.255
+            let vpnmask: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
+            let precalc: Ipv4Addr = ip4.bitand(vpnmask);
+            let buddy_in_this_direction: Vec<Ipv4Addr> = buddyip
+                .iter()
+                .filter(|buddy| precalc == buddy.bitand(vpnmask))
+                .cloned()
+                .collect();
+
+            // Is there buddy IP on this VPN connection?
+            if buddy_in_this_direction.is_empty() {
+                critical!(
+                    "There are no buddy IP addresses that belongs to {} device with IP {} and netmask {}.", &vpn.name, ip4, vpnmask
+                );
+                critical!("Your buddy IP list is {:?}", &buddyip);
+                return Err(format!("Empty buddy IP list for device {}", ip4));
+            }
+
+            // Check for intersection between buddy and own IPs
+            if buddy_in_this_direction.contains(&ip4) {
+                critical!(
+                    "You specified {} as buddy address but it is actually your address.",
+                    ip4
+                );
+                return Err(format!("Wrong buddy address {}", ip4));
+            }
+
+            // Remove used addresses from general list
+            buddyip = buddyip
+                .iter()
+                .filter(|b| !buddy_in_this_direction.contains(b))
+                .cloned()
+                .collect();
+
+            let v = e!(e!(pcap::Capture::from_device((*vpn).clone())).open());
+            vpn_ipv4_cap.push(Direction {
+                vpnip: ip4,
+                vpncap: v,
+                buddyip: buddy_in_this_direction,
+            });
+        } else {
+            critical!("Error: IPv6 VPN address is not supported here.");
+            return Err("IPv6 VPN address is not supported here.".to_string());
+        }
+    }
+    if !buddyip.is_empty() {
+        critical!("Those IP addresses {:?} does not belong to any known VPN connection. Either correct IP address or specify a VPN connection via CLI.", buddyip);
+        return Err("Redundant buddy IP.".to_string());
+    }
+    Ok(vpn_ipv4_cap)
+}
 
 fn main() -> Result<(), String> {
     let args: Arguments = parse_args()?;
@@ -341,35 +420,9 @@ fn main() -> Result<(), String> {
 
     e!(hw_cap.filter("dst 255.255.255.255 and udp", true));
 
-    // For weirdos with multiple active VPNs
-    let num_of_vpns = devices.dst.len();
-
-    // Open all destination devices
-    let mut vpn_ipv4_cap: Vec<(Ipv4Addr, Capture<Active>)> = Vec::with_capacity(num_of_vpns);
-    for vpn in &devices.dst {
-        let v = e!(e!(pcap::Capture::from_device((*vpn).clone())).open());
-        if let IpAddr::V4(ip4) = vpn.addresses[0].addr {
-            vpn_ipv4_cap.push((ip4, v));
-        } else {
-            critical!("Error: IPv6 VPN address is not supported here.")
-        }
-    }
-
     //TODO: network discovery for computers on the other side of VPN
 
-    // Check for intersection between buddy and own IPs
-    for (ip4, _) in &vpn_ipv4_cap {
-        if args.buddyip.contains(ip4) {
-            error!("You specified {} as buddy address but it is actually your address.", ip4);
-            return Err(format!("Wrong buddy address {}", ip4));
-        }
-    }
-    if let IpAddr::V4(ip4) = &(&devices.src).addresses[0].addr {
-        if args.buddyip.contains(&ip4) {
-            error!("You specified {} as buddy address but it is actually your address.", ip4);
-            return Err(format!("Wrong buddy address {}", ip4));
-        }
-    }
+    let mut vpn_ipv4_cap: Vec<Direction> = open_dst_devices(devices, &args.buddyip)?;
 
     // No panics, unwraps or "?" in this loop. Report failures and proceed to next packet.
     loop {
@@ -388,16 +441,15 @@ fn main() -> Result<(), String> {
 
         // Start from 14th byte to skip Ethernet Frame.
         let no_eth_packet_len = (packet.header.len - 14) as usize;
-        for (ip4, vcap) in &mut vpn_ipv4_cap {
+        for d in &mut vpn_ipv4_cap {
             let mut pktbuf: [u8; 1514] = [0u8; 1514];
             let no_ether_pktbuf: &mut [u8] = &mut pktbuf[0..no_eth_packet_len];
 
             // Rewrite source and destination IPs
             no_ether_pktbuf.copy_from_slice(&packet.data[14..]);
-            no_ether_pktbuf[12..16].copy_from_slice(&ip4.octets());
+            no_ether_pktbuf[12..16].copy_from_slice(&d.vpnip.octets());
 
-            //TODO: use only IPs that belongs to this device
-            for dstip in &args.buddyip {
+            for dstip in &d.buddyip {
                 no_ether_pktbuf[16..20].copy_from_slice(&dstip.octets());
 
                 if rewrite_ip4_checksum(&mut no_ether_pktbuf[0..20]).is_err() {
@@ -409,7 +461,7 @@ fn main() -> Result<(), String> {
 
                 trace!("{:?}", no_ether_pktbuf);
 
-                if let Err(e) = vcap.sendpacket(&mut *no_ether_pktbuf) {
+                if let Err(e) = d.vpncap.sendpacket(&mut *no_ether_pktbuf) {
                     error!("Error while resending packet: {}", e);
                 }
             }
