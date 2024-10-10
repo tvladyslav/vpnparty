@@ -365,11 +365,10 @@ fn open_dst_devices(
 
             // Is there buddy IP on this VPN connection?
             if buddy_in_this_direction.is_empty() {
-                critical!(
+                warn!(
                     "There are no buddy IP addresses that belongs to {} device with IP {} and netmask {}.", &vpn.name, ip4, vpnmask
                 );
-                critical!("Your buddy IP list is {:?}", &buddyip);
-                return Err(format!("Empty buddy IP list for device {}", ip4));
+                warn!("Your buddy IP list is {:?}", &buddyip);
             }
 
             // Check for intersection between buddy and own IPs
