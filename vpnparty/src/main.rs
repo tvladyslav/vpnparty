@@ -2,8 +2,12 @@ use pcap::{Active, Address, Capture, ConnectionStatus, Device};
 use std::net::{IpAddr, Ipv4Addr};
 use std::ops::BitAnd;
 use std::str::FromStr;
+use std::sync::mpsc;
+use std::thread;
 use std::vec::Vec;
 
+mod broadcast_listener;
+use broadcast_listener::{listen_broadcast, Bpacket};
 mod logger;
 
 // Not exhaustive, of course.
@@ -72,6 +76,7 @@ struct Direction {
 
 /// Macro to cast any error type to String
 /// //TODO: verify
+#[macro_export]
 macro_rules! e {
     ($($arg:tt)+) => ($($arg)+.map_err(|e| e.to_string())?)
 }
@@ -412,34 +417,32 @@ fn main() -> Result<(), String> {
     let devices: ParsedDevices = get_devices(&args)?;
     debug!("{:?}", devices);
 
-    // Setup Capture
-    let mut hw_cap = e!(e!(pcap::Capture::from_device(devices.src.clone()))
-        .immediate_mode(true)
-        .open());
-
-    e!(hw_cap.filter("dst 255.255.255.255 and udp", true));
-
     //TODO: network discovery for computers on the other side of VPN
 
+    let srcdev: Device = devices.src.clone();
     let mut vpn_ipv4_cap: Vec<Direction> = open_dst_devices(devices, &args.buddyip)?;
+    //TODO: debug!()
+
+    //TODO: any-source multicast using Sup! protocol
+
+    let (tx, rx) = mpsc::channel();
+    let btx = tx.clone();
+    let _broadcast_handle = thread::spawn(move || {
+        let _ = listen_broadcast(srcdev, btx);
+    });
 
     // No panics, unwraps or "?" in this loop. Report failures and proceed to next packet.
     loop {
-        let packet = match hw_cap.next_packet() {
+        let packet: Bpacket = match rx.recv() {
             Ok(p) => p,
             Err(e) => {
-                error!("Error while receiving packet: {}", e);
+                error!("Can't receive a packet: {}", e);
                 continue;
             }
         };
 
-        if packet.header.len <= 42 {
-            error!("This packet is empty, skipping.");
-            continue;
-        }
-
         // Start from 14th byte to skip Ethernet Frame.
-        let no_eth_packet_len = (packet.header.len - 14) as usize;
+        let no_eth_packet_len = (packet.len - 14) as usize;
         for d in &mut vpn_ipv4_cap {
             let mut pktbuf: [u8; 1514] = [0u8; 1514];
             let no_ether_pktbuf: &mut [u8] = &mut pktbuf[0..no_eth_packet_len];
@@ -466,4 +469,5 @@ fn main() -> Result<(), String> {
             }
         }
     }
+    // e!(broadcast_handle.join());
 }
