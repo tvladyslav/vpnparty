@@ -2,14 +2,9 @@ use std::sync::mpsc::Sender;
 
 use pcap::{Device, Packet};
 
-use crate::{e, error};
+use crate::{e, error, Vpacket};
 
-pub struct Bpacket {
-    pub len: usize,
-    pub data: Vec<u8>,
-}
-
-pub fn listen_broadcast(srcdev: Device, btx: Sender<Bpacket>) -> Result<(), String> {
+pub fn listen_broadcast(srcdev: Device, btx: Sender<Vpacket>) -> Result<(), String> {
     // Setup Capture
     let mut hw_cap = e!(e!(pcap::Capture::from_device(srcdev))
         .immediate_mode(true)
@@ -23,7 +18,7 @@ pub fn listen_broadcast(srcdev: Device, btx: Sender<Bpacket>) -> Result<(), Stri
         let packet: Packet = match p {
             Ok(p) => p,
             Err(e) => {
-                error!("Error while receiving packet: {}", e);
+                error!("Error while receiving broadcast packet: {}", e);
                 continue;
             }
         };
@@ -33,8 +28,6 @@ pub fn listen_broadcast(srcdev: Device, btx: Sender<Bpacket>) -> Result<(), Stri
             continue;
         }
 
-        let r: Bpacket = Bpacket {len: packet.header.len as usize, data: packet.data.to_vec() };
-
-        e!(btx.send(r));
+        e!(btx.send(Vpacket::B(packet.data.to_vec())));
     }
 }

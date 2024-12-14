@@ -1,4 +1,5 @@
 use pcap::{Active, Address, Capture, ConnectionStatus, Device};
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::ops::BitAnd;
 use std::str::FromStr;
@@ -7,8 +8,9 @@ use std::thread;
 use std::vec::Vec;
 
 mod broadcast_listener;
-use broadcast_listener::{listen_broadcast, Bpacket};
 mod logger;
+mod multicast_connection;
+mod udp;
 
 // Not exhaustive, of course.
 const VIRT_NAMES: [&str; 1] = ["Virtual"];
@@ -20,6 +22,12 @@ const HW_NAMES: [&str; 16] = [
     "AC1200", "ASIX", "Atheros", "Chelsio", "D-Link", "Dell", "JMicron", "Marvell", "Mellanox",
     "QLogic", "Ralink",
 ];
+
+const MULTICAST_IP: &str = "224.0.0.109";
+
+// TODO:
+//   -p for port filtering
+//   -m to redefine multicast address
 
 const HELP: &str = "\
 vpnparty is a next gen LAN party.
@@ -70,8 +78,17 @@ struct Arguments {
 /// VPN device and related destination IPs
 struct Direction {
     vpnip: Ipv4Addr,
+    vpndevice: Device,
     vpncap: Capture<Active>,
-    buddyip: Vec<Ipv4Addr>,
+    buddyip: HashSet<Ipv4Addr>,
+}
+
+enum Vpacket {
+    /// Broadcast packet body
+    B(Vec<u8>),
+
+    /// IP address gathered via multicast
+    M((usize, Ipv4Addr)),
 }
 
 /// Macro to cast any error type to String
@@ -225,40 +242,6 @@ fn print_devices(devs: &[Device]) {
     }
 }
 
-fn rewrite_ip4_checksum(buf: &mut [u8]) -> Result<(), String> {
-    if buf.len() != 20 {
-        return Err("Incorrect packet header length.".to_string());
-    }
-    buf[10] = 0u8;
-    buf[11] = 0u8;
-    let checksum: u16 = calculate_ip4_checksum(buf);
-    buf[10] = (checksum >> 8) as u8;
-    buf[11] = (checksum & 0xFF) as u8;
-    Ok(())
-}
-
-fn calculate_ip4_checksum(buf: &[u8]) -> u16 {
-    let sum: usize = buf
-        .chunks(2)
-        .map(|c| ((c[0] as usize) << 8) + (c[1] as usize))
-        .sum();
-    let carry: usize = sum >> 16;
-    let checksum: u16 = !(((sum & 0xFFFF) + carry) as u16);
-    checksum
-}
-
-#[test]
-fn ip4_checksum() {
-    #[rustfmt::skip]
-    let input: [u8; 20] = [
-        0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11,
-        0x00, 0x00, 0xc0, 0xa8, 0x00, 0x01, 0xc0, 0xa8, 0x00, 0xc7,
-    ];
-    let given_checksum = calculate_ip4_checksum(&input);
-    let expected_checksum: u16 = 0xb861u16;
-    assert_eq!(given_checksum, expected_checksum);
-}
-
 fn show_virt_dev_warning(virt: &[Device]) {
     if !virt.is_empty() {
         warn!("There are active virtual network adapters in your system.");
@@ -395,8 +378,9 @@ fn open_dst_devices(
             let v = e!(e!(pcap::Capture::from_device((*vpn).clone())).open());
             vpn_ipv4_cap.push(Direction {
                 vpnip: ip4,
+                vpndevice: vpn.clone(),
                 vpncap: v,
-                buddyip: buddy_in_this_direction,
+                buddyip: buddy_in_this_direction.into_iter().collect(),
             });
         } else {
             critical!("Error: IPv6 VPN address is not supported here.");
@@ -421,19 +405,31 @@ fn main() -> Result<(), String> {
 
     let srcdev: Device = devices.src.clone();
     let mut vpn_ipv4_cap: Vec<Direction> = open_dst_devices(devices, &args.buddyip)?;
-    //TODO: debug!()
-
-    //TODO: any-source multicast using Sup! protocol
 
     let (tx, rx) = mpsc::channel();
-    let btx = tx.clone();
-    let _broadcast_handle = thread::spawn(move || {
-        let _ = listen_broadcast(srcdev, btx);
-    });
+
+    // Capture game-related broadcast packets
+    {
+        let btx = tx.clone();
+        let _broadcast_handle = thread::spawn(move || {
+            let _ = broadcast_listener::listen_broadcast(srcdev, btx);
+        });
+    }
+
+    // Listen VPN devices for multicast discovery packets
+    let multicast_ip = e!(Ipv4Addr::from_str(MULTICAST_IP));
+    for (direction_id, d) in vpn_ipv4_cap.iter().enumerate() {
+        let mtx = tx.clone();
+        let multicastdev = d.vpndevice.clone();
+        let vpnip = d.vpnip;
+        let _multicast_handle = thread::spawn(move || {
+            let _ = multicast_connection::run_multicast(direction_id, multicastdev, mtx, vpnip, multicast_ip);
+        });
+    }
 
     // No panics, unwraps or "?" in this loop. Report failures and proceed to next packet.
     loop {
-        let packet: Bpacket = match rx.recv() {
+        let packet: Vpacket = match rx.recv() {
             Ok(p) => p,
             Err(e) => {
                 error!("Can't receive a packet: {}", e);
@@ -441,31 +437,30 @@ fn main() -> Result<(), String> {
             }
         };
 
-        // Start from 14th byte to skip Ethernet Frame.
-        let no_eth_packet_len = (packet.len - 14) as usize;
-        for d in &mut vpn_ipv4_cap {
-            let mut pktbuf: [u8; 1514] = [0u8; 1514];
-            let no_ether_pktbuf: &mut [u8] = &mut pktbuf[0..no_eth_packet_len];
+        match packet {
+            Vpacket::B(data) => {
+                // Start from 14th byte to skip Ethernet Frame.
+                // let no_eth_packet_len = data.len() - 14;
+                for d in &mut vpn_ipv4_cap {
+                    for dstip in &d.buddyip {
+                        let no_ether_pktbuf: Vec<u8> = udp::craft_udp_packet(
+                            &data[14..],
+                            &d.vpnip.octets(),
+                            &dstip.octets(),
+                            None,
+                        );
 
-            // Rewrite source and destination IPs
-            no_ether_pktbuf.copy_from_slice(&packet.data[14..]);
-            no_ether_pktbuf[12..16].copy_from_slice(&d.vpnip.octets());
+                        trace!("B {:?}", no_ether_pktbuf);
 
-            for dstip in &d.buddyip {
-                no_ether_pktbuf[16..20].copy_from_slice(&dstip.octets());
-
-                if rewrite_ip4_checksum(&mut no_ether_pktbuf[0..20]).is_err() {
-                    critical!("Should never happen! Checksum calculation error.");
-                    continue;
+                        if let Err(e) = d.vpncap.sendpacket(&*no_ether_pktbuf) {
+                            error!("Error while resending packet: {}", e);
+                        }
+                    }
                 }
-
-                //TODO: UDP checksum (optional)
-
-                trace!("{:?}", no_ether_pktbuf);
-
-                if let Err(e) = d.vpncap.sendpacket(&mut *no_ether_pktbuf) {
-                    error!("Error while resending packet: {}", e);
-                }
+            }
+            Vpacket::M((direction_id, sup_ip)) => {
+                vpn_ipv4_cap[direction_id].buddyip.insert(sup_ip);
+                trace!("M {:?}", sup_ip);
             }
         }
     }
