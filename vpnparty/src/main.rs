@@ -78,7 +78,7 @@ struct Arguments {
 /// VPN device and related destination IPs
 struct Direction {
     vpnip: Ipv4Addr,
-    vpndevice: Device,
+    // vpndevice: Device,
     vpncap: Capture<Active>,
     buddyip: HashSet<Ipv4Addr>,
 }
@@ -378,7 +378,7 @@ fn open_dst_devices(
             let v = e!(e!(pcap::Capture::from_device((*vpn).clone())).open());
             vpn_ipv4_cap.push(Direction {
                 vpnip: ip4,
-                vpndevice: vpn.clone(),
+                // vpndevice: vpn.clone(),
                 vpncap: v,
                 buddyip: buddy_in_this_direction.into_iter().collect(),
             });
@@ -420,10 +420,10 @@ fn main() -> Result<(), String> {
     let multicast_ip = e!(Ipv4Addr::from_str(MULTICAST_IP));
     for (direction_id, d) in vpn_ipv4_cap.iter().enumerate() {
         let mtx = tx.clone();
-        let multicastdev = d.vpndevice.clone();
+        // let multicastdev = d.vpndevice.clone();
         let vpnip = d.vpnip;
         let _multicast_handle = thread::spawn(move || {
-            let _ = multicast_connection::run_multicast(direction_id, multicastdev, mtx, vpnip, multicast_ip);
+            let _ = multicast_connection::run_multicast(direction_id, mtx, vpnip, multicast_ip);
         });
     }
 
