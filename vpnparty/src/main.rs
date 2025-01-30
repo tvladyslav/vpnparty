@@ -28,6 +28,7 @@ const MULTICAST_PORT: u16 = 54929;
 
 // TODO:
 //   -p for port filtering
+//   --version (app and Sup protocol)
 
 const HELP: &str = "\
 vpnparty is a next gen LAN party.
@@ -373,10 +374,10 @@ fn open_dst_devices(
 
             // Is there buddy IP on this VPN connection?
             if buddy_in_this_direction.is_empty() {
-                warn!(
+                info!(
                     "There are no buddy IP addresses that belongs to {} device with IP {} and netmask {}.", &vpn.name, ip4, vpnmask
                 );
-                warn!("Your buddy IP list is {:?}", &buddyip);
+                info!("Your buddy IP list is {:?}", &buddyip);
             }
 
             // Check for intersection between buddy and own IPs
@@ -466,6 +467,7 @@ fn main() -> Result<(), String> {
                 // let no_eth_packet_len = data.len() - 14;
                 for d in &mut vpn_ipv4_cap {
                     for dstip in &d.buddyip {
+                        // TODO: send via LAN as well!
                         let no_ether_pktbuf: Vec<u8> = udp::craft_udp_packet(
                             &data[14..],
                             &d.vpnip.octets(),
@@ -482,8 +484,11 @@ fn main() -> Result<(), String> {
                 }
             }
             Vpacket::M((direction_id, sup_ip)) => {
-                vpn_ipv4_cap[direction_id].buddyip.insert(sup_ip);
-                trace!("M {:?}", sup_ip);
+                let is_new = vpn_ipv4_cap[direction_id].buddyip.insert(sup_ip);
+                if is_new {
+                    info!("{} joined the party!", sup_ip);
+                }
+                trace!("M {}", sup_ip);
             }
         }
     }
