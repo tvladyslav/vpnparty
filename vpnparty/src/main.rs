@@ -23,12 +23,11 @@ const HW_NAMES: [&str; 16] = [
     "QLogic", "Ralink",
 ];
 
-const MULTICAST_IP: &str = "239.1.1.1";
+const MULTICAST_IP: &str = "239.1.2.3";
 const MULTICAST_PORT: u16 = 54929;
 
 // TODO:
 //   -p for port filtering
-//   -m to redefine multicast address
 
 const HELP: &str = "\
 vpnparty is a next gen LAN party.
@@ -52,6 +51,11 @@ OPTIONS:
   -b, --buddyip IP IP          Space-separated list of your teammates IP addresses.
                                Usually statically assigned in Wireguard/OpenVPN configuration.
                                Example: --buddyip 10.2.0.5 10.2.0.6 10.2.0.9 10.2.0.15
+  --mip IP                     Specify custom multicast IP (default is 239.1.2.3). Must be same for all buddies.
+                               Must belong to the multicast range! Best option is 239.*.*.* range.
+                               Example: --mip 239.240.241.242
+  --mport PORT                 Specify custom multicast port (default is 54929). Must be same for all buddies.
+                               Example: --mport 61111
 ";
 
 /// Devices that are parsed by internal heuristic, may be overridden by user
@@ -74,6 +78,8 @@ struct Arguments {
     srcdev: Option<String>,
     dstdevs: Vec<String>,
     buddyip: Vec<Ipv4Addr>,
+    mip: Option<Ipv4Addr>,
+    mport: Option<u16>
 }
 
 /// VPN device and related destination IPs
@@ -109,6 +115,8 @@ fn parse_args() -> Result<Arguments, String> {
     let mut srcdev: Option<String> = None;
     let mut dstdevs: Vec<String> = Vec::new();
     let mut buddyip: Vec<Ipv4Addr> = Vec::new();
+    let mut mip: Option<Ipv4Addr> = None;
+    let mut mport: Option<u16> = None;
 
     let mut parser = lexopt::Parser::from_env();
     while let Some(arg) = e!(parser.next()) {
@@ -144,6 +152,15 @@ fn parse_args() -> Result<Arguments, String> {
                     buddyip.push(a);
                 }
             }
+            Long("mip") => {
+                let s = e!(e!(parser.value()).string());
+                let a = e!(Ipv4Addr::from_str(&s));
+                mip = Some(a);
+            }
+            Long("mport") => {
+                let port: u16 = e!(e!(parser.value()).parse::<u16>());
+                mport = Some(port);
+            }
             Short('h') | Long("help") => {
                 println!("{}", HELP);
                 std::process::exit(0);
@@ -164,6 +181,8 @@ fn parse_args() -> Result<Arguments, String> {
         srcdev,
         dstdevs,
         buddyip,
+        mip,
+        mport
     })
 }
 
@@ -417,14 +436,17 @@ fn main() -> Result<(), String> {
         });
     }
 
+    // Get multicast IP address and port
+    let multicast_ip = args.mip.unwrap_or(e!(Ipv4Addr::from_str(MULTICAST_IP)));
+    let multicast_port = args.mport.unwrap_or(MULTICAST_PORT);
+
     // Listen VPN devices for multicast discovery packets
-    let multicast_ip = e!(Ipv4Addr::from_str(MULTICAST_IP));
     for (direction_id, d) in vpn_ipv4_cap.iter().enumerate() {
         let mtx = tx.clone();
         // let multicastdev = d.vpndevice.clone();
         let vpnip = d.vpnip;
         let _multicast_handle = thread::spawn(move || {
-            let _ = multicast_connection::run_multicast(direction_id, mtx, vpnip, multicast_ip, MULTICAST_PORT);
+            let _ = multicast_connection::run_multicast(direction_id, mtx, vpnip, multicast_ip, multicast_port);
         });
     }
 

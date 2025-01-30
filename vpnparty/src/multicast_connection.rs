@@ -5,10 +5,10 @@ use crate::{e, error, debug, trace, Vpacket};
 
 fn join_multicast_group(src_addr: &Ipv4Addr, m_addr: &Ipv4Addr, m_port: u16) -> Result<UdpSocket, String> {
     assert!(m_addr.is_multicast());
-    let vpn_socket = SocketAddrV4::new(src_addr.clone(), m_port);
+    let vpn_socket = SocketAddrV4::new(*src_addr, m_port);
     let udp_socket = e!(UdpSocket::bind(vpn_socket));
     e!(udp_socket.join_multicast_v4(m_addr, src_addr));
-    debug!("Joined multicast at address {:?}", m_addr);
+    debug!("Join multicast at address {:?}:{}", m_addr, m_port);
     Ok(udp_socket)
 }
 
