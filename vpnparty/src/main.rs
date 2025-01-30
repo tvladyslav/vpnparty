@@ -23,7 +23,8 @@ const HW_NAMES: [&str; 16] = [
     "QLogic", "Ralink",
 ];
 
-const MULTICAST_IP: &str = "224.0.0.109";
+const MULTICAST_IP: &str = "239.1.1.1";
+const MULTICAST_PORT: u16 = 54929;
 
 // TODO:
 //   -p for port filtering
@@ -423,7 +424,7 @@ fn main() -> Result<(), String> {
         // let multicastdev = d.vpndevice.clone();
         let vpnip = d.vpnip;
         let _multicast_handle = thread::spawn(move || {
-            let _ = multicast_connection::run_multicast(direction_id, mtx, vpnip, multicast_ip);
+            let _ = multicast_connection::run_multicast(direction_id, mtx, vpnip, multicast_ip, MULTICAST_PORT);
         });
     }
 

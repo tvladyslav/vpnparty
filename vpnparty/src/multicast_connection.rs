@@ -3,11 +3,11 @@ use std::sync::mpsc::Sender;
 
 use crate::{e, error, debug, trace, Vpacket};
 
-fn join_multicast_group(src_addr: &Ipv4Addr, m_addr: &Ipv4Addr) -> Result<UdpSocket, String> {
+fn join_multicast_group(src_addr: &Ipv4Addr, m_addr: &Ipv4Addr, m_port: u16) -> Result<UdpSocket, String> {
     assert!(m_addr.is_multicast());
-    let unspec_socket = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
-    let udp_socket = e!(UdpSocket::bind(unspec_socket));
-    e!(udp_socket.join_multicast_v4(m_addr, &src_addr));
+    let vpn_socket = SocketAddrV4::new(src_addr.clone(), m_port);
+    let udp_socket = e!(UdpSocket::bind(vpn_socket));
+    e!(udp_socket.join_multicast_v4(m_addr, src_addr));
     debug!("Joined multicast at address {:?}", m_addr);
     Ok(udp_socket)
 }
@@ -18,9 +18,10 @@ pub fn run_multicast(
     btx: Sender<Vpacket>,
     src_ip: Ipv4Addr,
     multicast_ip: Ipv4Addr,
+    multicast_port: u16
 ) -> Result<(), String> {
-    let listener: UdpSocket = join_multicast_group(&src_ip, &multicast_ip)?;
-    e!(listener.send_to(&[0x00, 0x00, 0x00, 0x01, 0x53, 0x75, 0x70, 0x21, 0x00, 0x00, 0x00, 0x00], SocketAddr::new(IpAddr::V4(multicast_ip), 54929)));
+    let listener: UdpSocket = join_multicast_group(&src_ip, &multicast_ip, multicast_port)?;
+    e!(listener.send_to(&[0x00, 0x00, 0x00, 0x01, 0x53, 0x75, 0x70, 0x21, 0x00, 0x00, 0x00, 0x00], SocketAddr::new(IpAddr::V4(multicast_ip), multicast_port)));
 
     let mut buf = [0; 100];
 
@@ -33,6 +34,11 @@ pub fn run_multicast(
                 continue;
             }
         };
+
+        if remote_addr.ip() == src_ip {
+            debug!("Sup!");
+            continue;
+        }
 
         trace!("MMM {:?}", &buf[..len]);
 
