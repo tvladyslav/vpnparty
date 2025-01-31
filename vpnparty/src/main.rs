@@ -23,11 +23,16 @@ const HW_NAMES: [&str; 16] = [
     "QLogic", "Ralink",
 ];
 
+const KNOWN_PORTS: [u16; 3] = [
+    4549,   // Torchlight 2
+    6112,   // Warcraft 3
+    42801,  // Titan Quest
+];
+
 const MULTICAST_IP: &str = "239.1.2.3";
 const MULTICAST_PORT: u16 = 54929;
 
 // TODO:
-//   -p for port filtering
 //   --version (app and Sup protocol)
 
 const HELP: &str = "\
@@ -46,12 +51,15 @@ OPTIONS:
   -s, --srcdev   \"NAME\"        Name of the device, which receives broadcast packets.
                                Usually this is your Ethernet or Wi-Fi adapter, but might be a Hyper-V Virtual adapter.
                                Example: --srcdev=\"\\Device\\NPF_{D0B8AF5E-B11D-XXXX-XXXX-XXXXXXXXXXXX}\"
-  -d, --dstdevs \"NAME\" \"NAME\"  Space-separated list of your VPN connection devices.
+  -d, --dstdev \"NAME\" \"NAME\"   Space-separated list of your VPN connection devices.
                                Supported VPNs are Wireguard and OpenVPN, altough other should work as well.
-                               Example --dstdevs \"\\Device\\NPF_{CFB8AF5E-A00C-XXXX-XXXX-XXXXXXXXXXXX}\" \"\\Device\\NPF_{E1C9B06F-C22E-XXXX-XXXX-XXXXXXXXXXXX}\"
+                               Example --dstdev \"\\Device\\NPF_{CFB8AF5E-A00C-XXXX-XXXX-XXXXXXXXXXXX}\" \"\\Device\\NPF_{E1C9B06F-C22E-XXXX-XXXX-XXXXXXXXXXXX}\"
   -b, --buddyip IP IP          Space-separated list of your teammates IP addresses.
                                Usually statically assigned in Wireguard/OpenVPN configuration.
                                Example: --buddyip 10.2.0.5 10.2.0.6 10.2.0.9 10.2.0.15
+  -p, --port PORT PORT         Capture broadcast packets only for given ports. Predefined constants are \"all\" (default) and \"known\".
+                               Example: -p 4549 6112 42801
+                               Example: -p known
   --mip IP                     Specify custom multicast IP (default is 239.1.2.3). Must be same for all buddies.
                                Must belong to the multicast range! Best option is 239.*.*.* range.
                                Example: --mip 239.240.241.242
@@ -77,8 +85,9 @@ struct ParsedDevices {
 #[derive(Debug)]
 struct Arguments {
     srcdev: Option<String>,
-    dstdevs: Vec<String>,
+    dstdev: Vec<String>,
     buddyip: Vec<Ipv4Addr>,
+    port: Vec<u16>,
     mip: Option<Ipv4Addr>,
     mport: Option<u16>
 }
@@ -114,8 +123,9 @@ fn parse_args() -> Result<Arguments, String> {
     let dev_name_len = 50;
 
     let mut srcdev: Option<String> = None;
-    let mut dstdevs: Vec<String> = Vec::new();
+    let mut dstdev: Vec<String> = Vec::new();
     let mut buddyip: Vec<Ipv4Addr> = Vec::new();
+    let mut port: Vec<u16> = Vec::new();
     let mut mip: Option<Ipv4Addr> = None;
     let mut mport: Option<u16> = None;
 
@@ -134,7 +144,7 @@ fn parse_args() -> Result<Arguments, String> {
                 }
                 srcdev = Some(s);
             }
-            Short('d') | Long("dstdevs") => {
+            Short('d') | Long("dstdev") => {
                 for d in e!(parser.values()) {
                     let s = e!(d.string());
                     if !s.starts_with("\\Device\\NPF_{")
@@ -143,7 +153,7 @@ fn parse_args() -> Result<Arguments, String> {
                     {
                         return Err(format!("Invalid device name {}.", s));
                     }
-                    dstdevs.push(s);
+                    dstdev.push(s);
                 }
             }
             Short('b') | Long("buddyip") => {
@@ -151,6 +161,25 @@ fn parse_args() -> Result<Arguments, String> {
                     let s = e!(ipstr.string());
                     let a = e!(Ipv4Addr::from_str(&s));
                     buddyip.push(a);
+                }
+            }
+            Short('p') | Long("port") => {
+                for portstr in e!(parser.values()) {
+                    let s: String = e!(portstr.string());
+                    match s.as_str() {
+                        "all" => {
+                            port.clear();
+                            break;          // Empty vector means any port
+                        },
+                        "known" => {
+                            port = KNOWN_PORTS.to_vec();
+                            break;
+                        },
+                        _ => {
+                            let p = e!(s.parse::<u16>());
+                            port.push(p);
+                        }
+                    }
                 }
             }
             Long("mip") => {
@@ -180,8 +209,9 @@ fn parse_args() -> Result<Arguments, String> {
 
     Ok(Arguments {
         srcdev,
-        dstdevs,
+        dstdev,
         buddyip,
+        port,
         mip,
         mport
     })
@@ -304,7 +334,7 @@ fn get_devices(a: &Arguments) -> Result<ParsedDevices, String> {
             .clone(),
     };
 
-    let dst: Vec<Device> = if a.dstdevs.is_empty() {
+    let dst: Vec<Device> = if a.dstdev.is_empty() {
         if split_devices.dst.is_empty() {
             return Err(
                 "Can't find your VPN connection. Please specify it manually via CLI.".to_string(),
@@ -316,7 +346,7 @@ fn get_devices(a: &Arguments) -> Result<ParsedDevices, String> {
         let result: Vec<Device> = devs
             .iter()
             .filter_map(|d| {
-                for v in &a.dstdevs {
+                for v in &a.dstdev {
                     if d.name == *v {
                         return Some(d.clone());
                     }
@@ -324,7 +354,7 @@ fn get_devices(a: &Arguments) -> Result<ParsedDevices, String> {
                 None
             })
             .collect();
-        if result.len() != a.dstdevs.len() {
+        if result.len() != a.dstdev.len() {
             error!("Can't find all provided VPN devices.");
             if !result.is_empty() {
                 error!("Devices, which are found:");
@@ -433,7 +463,7 @@ fn main() -> Result<(), String> {
     {
         let btx = tx.clone();
         let _broadcast_handle = thread::spawn(move || {
-            let _ = broadcast_listener::listen_broadcast(srcdev, btx);
+            let _ = broadcast_listener::listen_broadcast(srcdev, btx, &args.port);
         });
     }
 
