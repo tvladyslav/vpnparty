@@ -1,11 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::sync::mpsc::Sender;
 
-use crate::{e, error, debug, Vpacket};
-
-const SUP_LEN: usize = 6;
-const SUP: [u8; SUP_LEN] = [0x00, 0x01, 0x53, 0x75, 0x70, 0x21];
-const SUP_REPLY: [u8; 10] = [0x01, 0x53, 0x75, 0x70, 0x2c, 0x20, 0x62, 0x72, 0x6f, 0x21];
+use crate::{debug, e, error, Vpacket, SUP, SUP_LEN, SUP_REPLY};
 
 fn join_multicast_group(src_addr: &Ipv4Addr, m_addr: &Ipv4Addr, m_port: u16) -> Result<UdpSocket, String> {
     assert!(m_addr.is_multicast());
@@ -57,7 +53,7 @@ pub fn run_multicast(
 
         match buddy_ip {
             IpAddr::V4(remote_ipv4_addr) => e!(btx.send(Vpacket::M((direction_id, remote_ipv4_addr)))),
-            IpAddr::V6(remote_ipv6_addr) => error!("Received pachet from IPv6 address {}", remote_ipv6_addr),
+            IpAddr::V6(remote_ipv6_addr) => error!("Received packet from IPv6 address {}", remote_ipv6_addr),
         };
     }
     // TODO: leave multicast group

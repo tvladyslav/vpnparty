@@ -18,6 +18,10 @@ const MULTICAST_IP: &str = "239.1.2.3";
 const MULTICAST_PORT: u16 = 54929;
 const UDPING_PORT: u16    = 54928;
 
+const SUP_LEN: usize = 6;
+const SUP: [u8; SUP_LEN] = [0x00, 0x01, 0x53, 0x75, 0x70, 0x21];
+const SUP_REPLY: [u8; 10] = [0x01, 0x53, 0x75, 0x70, 0x2c, 0x20, 0x62, 0x72, 0x6f, 0x21];
+
 // TODO:
 //   --version (app and Sup protocol)
 
@@ -98,6 +102,7 @@ fn main() -> Result<(), String> {
         let _broadcast_handle = thread::spawn(move || {
             let _ = broadcast_listener::listen_broadcast(srcdev, btx, &args.port);
         });
+
         info!("Broadcast listener initialized.");
     }
 
