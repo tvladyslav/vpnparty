@@ -1,4 +1,4 @@
-use pcap::{Active, Address, Capture, ConnectionStatus, Device};
+use pcap::{Active, Capture, ConnectionStatus, Device};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::ops::BitAnd;
@@ -8,6 +8,7 @@ use std::thread;
 use std::vec::Vec;
 
 mod broadcast_listener;
+mod cli_parser;
 mod logger;
 mod multicast_discovery;
 mod udp_discovery;
@@ -24,54 +25,12 @@ const HW_NAMES: [&str; 16] = [
     "QLogic", "Ralink",
 ];
 
-const KNOWN_PORTS: [u16; 3] = [
-    4549,   // Torchlight 2
-    6112,   // Warcraft 3
-    42801,  // Titan Quest
-];
-
 const MULTICAST_IP: &str = "239.1.2.3";
 const MULTICAST_PORT: u16 = 54929;
 const UDPING_PORT: u16    = 54928;
 
 // TODO:
 //   --version (app and Sup protocol)
-
-const HELP: &str = "\
-vpnparty is a next gen LAN party.
-
-USAGE:
-  vpnparty [FLAGS] [OPTIONS]
-
-FLAGS:
-  -h, --help              Prints help information
-  --devices               List available network adapters
-  --monochrome            Don't use colors in output
-  --no-multicast          Disable multicast discovery
-  --no-udping             Disable ping discovery
-
-OPTIONS:
-  -v, --verbose  NUMBER        Verbosity level [0-3].
-  -s, --srcdev   \"NAME\"        Name of the device, which receives broadcast packets.
-                               Usually this is your Ethernet or Wi-Fi adapter, but might be a Hyper-V Virtual adapter.
-                               Example: --srcdev=\"\\Device\\NPF_{D0B8AF5E-B11D-XXXX-XXXX-XXXXXXXXXXXX}\"
-  -d, --dstdev \"NAME\" \"NAME\"   Space-separated list of your VPN connection devices.
-                               Supported VPNs are Wireguard and OpenVPN, altough other should work as well.
-                               Example --dstdev \"\\Device\\NPF_{CFB8AF5E-A00C-XXXX-XXXX-XXXXXXXXXXXX}\" \"\\Device\\NPF_{E1C9B06F-C22E-XXXX-XXXX-XXXXXXXXXXXX}\"
-  -b, --buddyip IP IP          Space-separated list of your teammates IP addresses.
-                               Usually statically assigned in Wireguard/OpenVPN configuration.
-                               Example: --buddyip 10.2.0.5 10.2.0.6 10.2.0.9 10.2.0.15
-  -p, --port PORT PORT         Capture broadcast packets only for given ports. Predefined constants are \"all\" (default) and \"known\".
-                               Example: -p 4549 6112 42801
-                               Example: -p known
-  --mip IP                     Specify custom multicast IP (default is 239.1.2.3). Must be same for all buddies.
-                               Must belong to the multicast range! Best option is 239.*.*.* range.
-                               Example: --mip 239.240.241.242
-  --mport PORT                 Specify custom multicast port (default is 54929). Must be same for all buddies.
-                               Example: --mport 61111
-  --uport PORT                 Specify custom udp discovery port (default is 54928). Must be same for all buddies.
-                               Example: --uport 61112
-";
 
 /// Devices that are parsed by internal heuristic, may be overridden by user
 struct PromisingDevices {
@@ -85,20 +44,6 @@ struct PromisingDevices {
 struct ParsedDevices {
     src: Device,
     dst: Vec<Device>,
-}
-
-/// Command line arguments
-#[derive(Debug)]
-struct Arguments {
-    srcdev: Option<String>,
-    dstdev: Vec<String>,
-    buddyip: Vec<Ipv4Addr>,
-    port: Vec<u16>,
-    mip: Option<Ipv4Addr>,
-    mport: Option<u16>,
-    uport: Option<u16>,
-    no_multicast: bool,
-    no_udping: bool,
 }
 
 /// VPN device and related destination IPs
@@ -125,124 +70,6 @@ enum Vpacket {
 #[macro_export]
 macro_rules! e {
     ($($arg:tt)+) => ($($arg)+.map_err(|e| e.to_string())?)
-}
-
-/// Parse command line arguments
-fn parse_args() -> Result<Arguments, String> {
-    use lexopt::prelude::*;
-
-    let max_verbosity = 3u8;
-    let dev_name_len = 50;
-
-    let mut srcdev: Option<String> = None;
-    let mut dstdev: Vec<String> = Vec::new();
-    let mut buddyip: Vec<Ipv4Addr> = Vec::new();
-    let mut port: Vec<u16> = Vec::new();
-    let mut mip: Option<Ipv4Addr> = None;
-    let mut mport: Option<u16> = None;
-    let mut uport: Option<u16> = None;
-    let mut no_multicast: bool = false;
-    let mut no_udping: bool = false;
-
-    let mut parser = lexopt::Parser::from_env();
-    while let Some(arg) = e!(parser.next()) {
-        match arg {
-            Short('v') | Long("verbose") => {
-                let verbosity: u8 = e!(e!(parser.value()).parse::<u8>());
-                logger::set_verbosity(std::cmp::min(verbosity, max_verbosity));
-            }
-            Short('s') | Long("srcdev") => {
-                let s = e!(e!(parser.value()).string());
-                if !s.starts_with("\\Device\\NPF_{") || !s.ends_with("}") || s.len() != dev_name_len
-                {
-                    return Err(format!("Invalid device name {}.", s));
-                }
-                srcdev = Some(s);
-            }
-            Short('d') | Long("dstdev") => {
-                for d in e!(parser.values()) {
-                    let s = e!(d.string());
-                    if !s.starts_with("\\Device\\NPF_{")
-                        || !s.ends_with("}")
-                        || s.len() != dev_name_len
-                    {
-                        return Err(format!("Invalid device name {}.", s));
-                    }
-                    dstdev.push(s);
-                }
-            }
-            Short('b') | Long("buddyip") => {
-                for ipstr in e!(parser.values()) {
-                    let s = e!(ipstr.string());
-                    let a = e!(Ipv4Addr::from_str(&s));
-                    buddyip.push(a);
-                }
-            }
-            Short('p') | Long("port") => {
-                for portstr in e!(parser.values()) {
-                    let s: String = e!(portstr.string());
-                    match s.as_str() {
-                        "all" => {
-                            port.clear();
-                            break;          // Empty vector means any port
-                        },
-                        "known" => {
-                            port = KNOWN_PORTS.to_vec();
-                            break;
-                        },
-                        _ => {
-                            let p = e!(s.parse::<u16>());
-                            port.push(p);
-                        }
-                    }
-                }
-            }
-            Long("mip") => {
-                let s = e!(e!(parser.value()).string());
-                let a = e!(Ipv4Addr::from_str(&s));
-                mip = Some(a);
-            }
-            Long("mport") => {
-                let port: u16 = e!(e!(parser.value()).parse::<u16>());
-                mport = Some(port);
-            }
-            Long("uport") => {
-                let port: u16 = e!(e!(parser.value()).parse::<u16>());
-                uport = Some(port);
-            }
-            Short('h') | Long("help") => {
-                println!("{}", HELP);
-                std::process::exit(0);
-            }
-            Long("devices") => {
-                let devs: Vec<Device> = get_promising_devices()?;
-                print_devices(&devs);
-                std::process::exit(0);
-            }
-            Long("monochrome") => {
-                crate::logger::set_monochrome();
-            }
-            Long("no-multicast") => {
-                no_multicast = true;
-            }
-            Long("no-udping") => {
-                no_udping = true;
-            }
-            _ => return Err(format!("Unexpected command line option {:?}.", arg)),
-        }
-    }
-
-    Ok(Arguments {
-        srcdev,
-        dstdev,
-        buddyip,
-        port,
-        mip,
-        mport,
-        uport,
-        no_multicast,
-        no_udping
-    })
 }
 
 /// Get list of all network adapters and filter out useless.
@@ -298,29 +125,6 @@ fn split_to_src_and_dst(full_list: Vec<Device>) -> PromisingDevices {
     PromisingDevices { src, dst, virt }
 }
 
-fn print_devices(devs: &[Device]) {
-    if crate::logger::is_monochrome() {
-        println!(
-            "Network adapter name                                IP address       Description"
-        );
-    } else {
-        println!("\x1b[32mNetwork adapter name                                IP address       Description\x1b[0m");
-    }
-    for dev in devs {
-        let ip_opt: &Option<&Address> = &dev.addresses.iter().find(|a| a.addr.is_ipv4());
-        if let Some(ip) = ip_opt {
-            let row = format!(
-                "{0}  {1:W$}  {2}",
-                dev.name,
-                ip.addr.to_string(),
-                dev.desc.clone().unwrap_or_default(),
-                W = 15
-            );
-            println!("{}", row);
-        }
-    }
-}
-
 fn show_virt_dev_warning(virt: &[Device]) {
     if !virt.is_empty() {
         warn!("There are active virtual network adapters in your system.");
@@ -343,7 +147,7 @@ fn show_virt_dev_warning(virt: &[Device]) {
 }
 
 /// Verify CLI arguments. Fill gaps.
-fn get_devices(a: &Arguments) -> Result<ParsedDevices, String> {
+fn get_devices(a: &cli_parser::Arguments) -> Result<ParsedDevices, String> {
     let devs: Vec<Device> = get_promising_devices()?;
     let split_devices: PromisingDevices = split_to_src_and_dst(devs.clone());
     show_virt_dev_warning(&split_devices.virt);
@@ -474,7 +278,7 @@ fn open_dst_devices(
 }
 
 fn main() -> Result<(), String> {
-    let args: Arguments = parse_args()?;
+    let args: cli_parser::Arguments = cli_parser::parse_args()?;
     debug!("{:?}", args);
 
     let devices: ParsedDevices = get_devices(&args)?;
