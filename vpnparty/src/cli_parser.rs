@@ -1,8 +1,9 @@
 use std::{net::Ipv4Addr, str::FromStr};
 
-use pcap::{Address, Device};
+use pcap::Device;
 
-use crate::{e, get_promising_devices, logger};
+use crate::{e, logger};
+use crate::network_devices::{get_promising_devices, print_devices};
 
 const HELP: &str = "\
 vpnparty is a next gen LAN party.
@@ -58,29 +59,6 @@ pub struct Arguments {
     pub uport: Option<u16>,
     pub no_multicast: bool,
     pub no_udping: bool,
-}
-
-fn print_devices(devs: &[Device]) {
-    if crate::logger::is_monochrome() {
-        println!(
-            "Network adapter name                                IP address       Description"
-        );
-    } else {
-        println!("\x1b[32mNetwork adapter name                                IP address       Description\x1b[0m");
-    }
-    for dev in devs {
-        let ip_opt: &Option<&Address> = &dev.addresses.iter().find(|a| a.addr.is_ipv4());
-        if let Some(ip) = ip_opt {
-            let row = format!(
-                "{0}  {1:W$}  {2}",
-                dev.name,
-                ip.addr.to_string(),
-                dev.desc.clone().unwrap_or_default(),
-                W = 15
-            );
-            println!("{}", row);
-        }
-    }
 }
 
 /// Parse command line arguments

@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::sync::mpsc::Sender;
 
-use crate::{e, error, debug, trace, Vpacket};
+use crate::{e, error, debug, Vpacket};
 
 const SUP_LEN: usize = 6;
 const SUP: [u8; SUP_LEN] = [0x00, 0x01, 0x53, 0x75, 0x70, 0x21];
