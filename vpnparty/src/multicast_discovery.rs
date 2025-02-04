@@ -46,7 +46,7 @@ pub fn run_multicast(
             continue;
         }
 
-        trace!("MMM {:?}", &buf[..len]);
+        // trace!("MMM {:?}", &buf[..len]);
 
         if len == SUP_LEN && buf[0..SUP_LEN] == SUP {
             // Greetings to the newcommer.

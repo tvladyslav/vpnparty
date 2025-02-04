@@ -9,7 +9,8 @@ use std::vec::Vec;
 
 mod broadcast_listener;
 mod logger;
-mod multicast_connection;
+mod multicast_discovery;
+mod udp_discovery;
 mod udp;
 
 // Not exhaustive, of course.
@@ -31,6 +32,7 @@ const KNOWN_PORTS: [u16; 3] = [
 
 const MULTICAST_IP: &str = "239.1.2.3";
 const MULTICAST_PORT: u16 = 54929;
+const UDPING_PORT: u16    = 54928;
 
 // TODO:
 //   --version (app and Sup protocol)
@@ -45,6 +47,8 @@ FLAGS:
   -h, --help              Prints help information
   --devices               List available network adapters
   --monochrome            Don't use colors in output
+  --no-multicast          Disable multicast discovery
+  --no-udping             Disable ping discovery
 
 OPTIONS:
   -v, --verbose  NUMBER        Verbosity level [0-3].
@@ -65,6 +69,8 @@ OPTIONS:
                                Example: --mip 239.240.241.242
   --mport PORT                 Specify custom multicast port (default is 54929). Must be same for all buddies.
                                Example: --mport 61111
+  --uport PORT                 Specify custom udp discovery port (default is 54928). Must be same for all buddies.
+                               Example: --uport 61112
 ";
 
 /// Devices that are parsed by internal heuristic, may be overridden by user
@@ -89,7 +95,10 @@ struct Arguments {
     buddyip: Vec<Ipv4Addr>,
     port: Vec<u16>,
     mip: Option<Ipv4Addr>,
-    mport: Option<u16>
+    mport: Option<u16>,
+    uport: Option<u16>,
+    no_multicast: bool,
+    no_udping: bool,
 }
 
 /// VPN device and related destination IPs
@@ -106,6 +115,9 @@ enum Vpacket {
 
     /// IP address gathered via multicast
     M((usize, Ipv4Addr)),
+
+    /// IP address gathered via udping
+    U((usize, Ipv4Addr)),
 }
 
 /// Macro to cast any error type to String
@@ -128,6 +140,9 @@ fn parse_args() -> Result<Arguments, String> {
     let mut port: Vec<u16> = Vec::new();
     let mut mip: Option<Ipv4Addr> = None;
     let mut mport: Option<u16> = None;
+    let mut uport: Option<u16> = None;
+    let mut no_multicast: bool = false;
+    let mut no_udping: bool = false;
 
     let mut parser = lexopt::Parser::from_env();
     while let Some(arg) = e!(parser.next()) {
@@ -191,6 +206,10 @@ fn parse_args() -> Result<Arguments, String> {
                 let port: u16 = e!(e!(parser.value()).parse::<u16>());
                 mport = Some(port);
             }
+            Long("uport") => {
+                let port: u16 = e!(e!(parser.value()).parse::<u16>());
+                uport = Some(port);
+            }
             Short('h') | Long("help") => {
                 println!("{}", HELP);
                 std::process::exit(0);
@@ -203,6 +222,12 @@ fn parse_args() -> Result<Arguments, String> {
             Long("monochrome") => {
                 crate::logger::set_monochrome();
             }
+            Long("no-multicast") => {
+                no_multicast = true;
+            }
+            Long("no-udping") => {
+                no_udping = true;
+            }
             _ => return Err(format!("Unexpected command line option {:?}.", arg)),
         }
     }
@@ -213,7 +238,10 @@ fn parse_args() -> Result<Arguments, String> {
         buddyip,
         port,
         mip,
-        mport
+        mport,
+        uport,
+        no_multicast,
+        no_udping
     })
 }
 
@@ -404,10 +432,10 @@ fn open_dst_devices(
 
             // Is there buddy IP on this VPN connection?
             if buddy_in_this_direction.is_empty() {
-                info!(
+                debug!(
                     "There are no buddy IP addresses that belongs to {} device with IP {} and netmask {}.", &vpn.name, ip4, vpnmask
                 );
-                info!("Your buddy IP list is {:?}", &buddyip);
+                debug!("Your buddy IP list is {:?}", &buddyip);
             }
 
             // Check for intersection between buddy and own IPs
@@ -452,12 +480,43 @@ fn main() -> Result<(), String> {
     let devices: ParsedDevices = get_devices(&args)?;
     debug!("{:?}", devices);
 
-    //TODO: network discovery for computers on the other side of VPN
-
     let srcdev: Device = devices.src.clone();
     let mut vpn_ipv4_cap: Vec<Direction> = open_dst_devices(devices, &args.buddyip)?;
 
     let (tx, rx) = mpsc::channel();
+
+    // Init multicast peer discovery
+    if !args.no_multicast {
+        // Get multicast IP address and port
+        let multicast_ip = args.mip.unwrap_or(e!(Ipv4Addr::from_str(MULTICAST_IP)));
+        let multicast_port = args.mport.unwrap_or(MULTICAST_PORT);
+
+        // Listen VPN devices for multicast discovery packets
+        for (direction_id, d) in vpn_ipv4_cap.iter().enumerate() {
+            let mtx = tx.clone();
+            let vpnip = d.vpnip;
+            let _multicast_handle = thread::spawn(move || {
+                let _ = multicast_discovery::run_multicast(direction_id, mtx, vpnip, multicast_ip, multicast_port);
+            });
+        }
+
+        info!("Multicast peer discovery initialized.");
+    }
+
+    // Init udping peer discovery
+    if !args.no_udping {
+        let udping_port = args.uport.unwrap_or(UDPING_PORT);
+
+        for (direction_id, d) in vpn_ipv4_cap.iter().enumerate() {
+            let utx = tx.clone();
+            let vpnip = d.vpnip;
+            let _udping_handle = thread::spawn(move || {
+                let _ = udp_discovery::run_udping(direction_id, utx, vpnip, udping_port);
+            });
+        }
+
+        info!("UDP peer discovery initialized.");
+    }
 
     // Capture game-related broadcast packets
     {
@@ -465,20 +524,7 @@ fn main() -> Result<(), String> {
         let _broadcast_handle = thread::spawn(move || {
             let _ = broadcast_listener::listen_broadcast(srcdev, btx, &args.port);
         });
-    }
-
-    // Get multicast IP address and port
-    let multicast_ip = args.mip.unwrap_or(e!(Ipv4Addr::from_str(MULTICAST_IP)));
-    let multicast_port = args.mport.unwrap_or(MULTICAST_PORT);
-
-    // Listen VPN devices for multicast discovery packets
-    for (direction_id, d) in vpn_ipv4_cap.iter().enumerate() {
-        let mtx = tx.clone();
-        // let multicastdev = d.vpndevice.clone();
-        let vpnip = d.vpnip;
-        let _multicast_handle = thread::spawn(move || {
-            let _ = multicast_connection::run_multicast(direction_id, mtx, vpnip, multicast_ip, multicast_port);
-        });
+        info!("Broadcast listener initialized.");
     }
 
     // No panics, unwraps or "?" in this loop. Report failures and proceed to next packet.
@@ -519,6 +565,13 @@ fn main() -> Result<(), String> {
                     info!("{} joined the party!", sup_ip);
                 }
                 trace!("M {}", sup_ip);
+            }
+            Vpacket::U((direction_id, sup_ip)) => {
+                let is_new = vpn_ipv4_cap[direction_id].buddyip.insert(sup_ip);
+                if is_new {
+                    info!("{} joined the party!", sup_ip);
+                }
+                trace!("U {}", sup_ip);
             }
         }
     }

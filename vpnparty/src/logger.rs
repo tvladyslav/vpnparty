@@ -1,7 +1,7 @@
 /// Simplest possible logger
 
 /// Start from 3, this way warn, err and critical are always on.
-pub static mut VERBOSITY: u8 = 3;
+pub static mut VERBOSITY: u8 = 4;
 pub static mut MONOCHROME: bool = false;
 
 /// Increase verbosity level
