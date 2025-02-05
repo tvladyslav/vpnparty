@@ -1,7 +1,14 @@
 [package]
 name = "vpnparty"
 version = "0.1.0"
+authors = "Vladyslav Tsilytskyi"
 edition = "2021"
+description "A tool to send broadcast packets through VPN connection."
+homepage = "https://github.com/tvladyslav/vpnparty"
+repository = "https://github.com/tvladyslav/vpnparty"
+license = "GPL-3.0-only"
+keywords = ["VPN", "UDP", "broadcast", "multicast", "spoofing", "gaming"]
+categories = ["command-line-utilities", "network-programming"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
