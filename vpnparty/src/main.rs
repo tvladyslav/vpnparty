@@ -106,6 +106,8 @@ fn main() -> Result<(), String> {
         info!("Broadcast listener initialized.");
     }
 
+    // TODO: add refresh!
+
     // No panics, unwraps or "?" in this loop. Report failures and proceed to next packet.
     loop {
         let packet: Vpacket = match rx.recv() {
