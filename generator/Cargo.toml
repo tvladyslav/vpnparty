@@ -1,9 +1,9 @@
 [package]
 name = "generator"
 version = "0.1.0"
-authors = "Vladyslav Tsilytskyi"
+authors = ["Vladyslav Tsilytskyi"]
 edition = "2021"
-description "A tool for broadcast packets generation."
+description = "A tool for broadcast packets generation."
 homepage = "https://github.com/tvladyslav/vpnparty"
 repository = "https://github.com/tvladyslav/vpnparty"
 license = "GPL-3.0-only"

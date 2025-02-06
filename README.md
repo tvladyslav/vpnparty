@@ -42,13 +42,13 @@ You can adapt application behavior to your needs. Let's see some examples:\
 ## How to compile
 
 ```bash
-git clone <REPO>
+git clone git@github.com:tvladyslav/vpnparty.git
 cd vpnparty
 cargo build --release
 cargo clippy
 ```
 
-Compilation takes around 7 seconds. `target\release` will contain `generator.exe` and `vpnparty.exe`.\
+`target\release` will contain `generator.exe` and `vpnparty.exe`.
 - generator.exe is the debug tool. It sends 2 broadcast packets (to ports 4549 and 6112) every second. See troubleshooting section for details.
 - vpnparty.exe is the application that you need.
 
