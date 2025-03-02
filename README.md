@@ -2,6 +2,15 @@
 
 A LAN party via VPN. Allows games to discover each other through VPN like if they were in local network.
 
+## Verified games
+
+| Game               | Version          | Port  | Status | Note    |
+| :----------------- | :--------------- | ----: | ------ | :------ |
+| Titan Quest        | 2.10.21415       | 42801 | ✅     |         |
+| Torchlight 2       | 1.25.9.5         |  4549 | ✅     |         |
+| Warcraft 3         | 1.26.0.6410      |  6112 | ✅     | Original, not reforged Frozen Throne and Reign of Chaos         |
+| Chicken invaders 5 | 5.0.0.0          | 23016 | ❌     | I suspect that game has checks whether the packet is broadcast. |
+
 ## How it works
 
 There are 3 main steps:

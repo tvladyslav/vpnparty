@@ -19,7 +19,7 @@ FLAGS:
   --no-udping             Disable ping discovery
 
 OPTIONS:
-  -v, --verbose  NUMBER        Verbosity level [0-3].
+  -v, --verbose  NUMBER        Verbosity level [0-2] where 1 is debug and 2 trace level.
   -s, --srcdev   \"NAME\"        Name of the device, which receives broadcast packets.
                                Usually this is your Ethernet or Wi-Fi adapter, but might be a Hyper-V Virtual adapter.
                                Example: --srcdev=\"\\Device\\NPF_{D0B8AF5E-B11D-XXXX-XXXX-XXXXXXXXXXXX}\"
