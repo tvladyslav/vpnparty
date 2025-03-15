@@ -8,27 +8,8 @@ A LAN party via VPN. Allows games to discover each other through VPN like if the
 | :----------------- | :--------------- | ----: | ------ | :------ |
 | Titan Quest        | 2.10.21415       | 42801 | ✅     |         |
 | Torchlight 2       | 1.25.9.5         |  4549 | ✅     |         |
-| Warcraft 3         | 1.26.0.6410      |  6112 | ✅     | Original, not reforged Frozen Throne and Reign of Chaos         |
+| Warcraft 3         | 1.26.0.6410      |  6112 | ✅     | Original (not reforged) Frozen Throne and Reign of Chaos        |
 | Chicken invaders 5 | 5.0.0.0          | 23016 | ❌     | I suspect that game has checks whether the packet is broadcast. |
-
-## How it works
-
-There are 3 main steps:
-
-1. Announcement. vpnparty notifies whole VPN network that you want to play.
-2. Discovery. vpnparty listens to replies. There should be a second computer willing to join the game.
-3. Retransmission. Once at least one peer discovered, vpnparty starts retransmitting broadcast packets to the peer(s).
-
-There are two mechanisms for announcement/discovery working simultaneously:
-
-- multicast. Efficient and nice way to discover peer.
-  - Advantage - announcement is the single packet. Minimalistic.
-  - Disadvantage - network requires additional configuration to support multicast packets. Multicast is not available in VPNs by default and most likely disabled in your case.
-- UDP. Raw brute force. Announcement step sends packet to every IP address in range 255.255.255.0. If your peers are there, connection will be established.
-  - Advantage - works.
-  - Disadvantage - spams network with 255 packets (only once!).
-
-Retransmission is simple. Capture broadcast packets using `Npcap`, replace broadcast IP address by peer IP address, send. Repeat for every peer.
 
 ## How to use
 
@@ -45,8 +26,48 @@ You can adapt application behavior to your needs. Let's see some examples:\
 `.\vpnparty -b 10.0.0.15 10.0.0.22` manually specify peer IP addresses.\
 `.\vpnparty -b 10.0.0.15 10.0.0.22 --no-multicast --no-udping` if you know all your peers (let's say there are 3 players), feel free to disable both discovery mechanisms as redundant.\
 `.\vpnparty --monochrome` is useful if your command line doesn't support color output.\
-`.\vpnparty -p 7654` retransmits only broadcast packets with destination port 7654. Useful if you know exact port that your game uses. By default all broadcast packets are retransmitted, which might be not desired. One more option is `-p known`, which is the synonym to `-p 4549 6112 42801`. See those ports below.\
+`.\vpnparty -p 7654` retransmits only broadcast packets with destination port 7654. Useful if you know exact port that your game uses. By default all broadcast packets are retransmitted, which might be not desired. One more option is `-p known`, which is the synonym to `-p 4549 6112 42801`. See those ports in `Verified games` section.\
 `.\vpnparty -v=1` to see debug messages. Set `-v=2` to see all processed packets. Useful for debug.
+
+## How it works
+
+Expert option: specify friend's IP manually, disable discovery protocols. Your friend doesn't need to run `vpnparty` at all.
+`.\vpnparty.exe -b 10.0.0.2 --no-multicast --no-udping`
+
+```mermaid
+sequenceDiagram
+    participant w1 as PC 1<br/>IP: 10.0.0.1<br/>Warcraft 3
+    participant v  as PC 1<br/>IP: 10.0.0.1<br/>vpnparty
+    participant w2 as PC 2<br/>IP: 10.0.0.2<br/>Warcraft 3
+    Note over w1: Original packet:<br/>Dst IP: 255.255.255.255<br/>Dst port: 6112
+    w1-->>v: Broadcast packet<br/>intercepted by npcap
+    Note over v: Rewrite the packet header:<br/>Dst IP: 10.0.0.2<br/>Dst port: 6112
+    v->>w2: VPN connection
+    Note over w2: Reply packet:<br/>Dst IP: 10.0.0.1<br/>Dst port: 6112
+    w2->>w1: Game reply via VPN connection
+```
+
+Regular option: no arguments, `vpnparty` runs on both sides, rely on autodiscovery.
+`.\vpnparty.exe`
+
+```mermaid
+sequenceDiagram
+    participant w1 as PC 1<br/>IP: 10.0.0.1<br/>Warcraft 3
+    participant v1 as PC 1<br/>IP: 10.0.0.1<br/>vpnparty
+    participant v2 as PC 2<br/>IP: 10.0.0.2<br/>vpnparty
+    participant w2 as PC 2<br/>IP: 10.0.0.2<br/>Warcraft 3
+    v1-xv2: Multicast request (port 54929, assume failed)
+    v1->>v2: UDP request (port 54928)
+    Note over v2: Peer discovered at 10.0.0.1
+    v2->>v1: UDP reply (IP 10.0.0.1, port 54928)
+    Note over v1: Peer discovered at 10.0.0.2
+    Note over w1: Original packet:<br/>Dst IP: 255.255.255.255<br/>Dst port: 6112
+    w1-->>v1: Broadcast packet<br/>intercepted by npcap
+    Note over v1: Rewrite the packet:<br/>Dst IP: 10.0.0.2<br/>Dst port: 6112
+    v1->>w2: VPN connection
+    Note over w2: Reply packet:<br/>Dst IP: 10.0.0.1<br/>Dst port: 6112
+    w2->>w1: Game reply via VPN connection
+```
 
 ## How to compile
 
