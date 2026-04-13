@@ -1,5 +1,10 @@
 # vpnparty
 
+[![Windows build](https://github.com/tvladyslav/vpnparty/actions/workflows/build.yml/badge.svg)](https://github.com/tvladyslav/vpnparty/actions/workflows/build.yml)
+[![Clippy](https://github.com/tvladyslav/vpnparty/actions/workflows/clippy.yml/badge.svg)](https://github.com/tvladyslav/vpnparty/actions/workflows/clippy.yml)
+[![Formatting](https://github.com/tvladyslav/vpnparty/actions/workflows/fmt.yml/badge.svg)](https://github.com/tvladyslav/vpnparty/actions/workflows/fmt.yml)
+<img alt="MSRV 1.78.0" src="https://img.shields.io/badge/msrv-1.78.0-blue?style=flat-square">
+
 A LAN party via VPN. Allows games to discover each other through VPN like if they were in local network.
 
 ## Verified games
@@ -13,7 +18,7 @@ A LAN party via VPN. Allows games to discover each other through VPN like if the
 
 ## How to use
 
-1. Download and install latest [Npcap](https://npcap.com/#download). Tested with versions 1.79 and 1.80. Any compatible should fit.
+1. Download and install latest [Npcap](https://npcap.com/#download). Tested with versions 1.79, 1.80 and 1.87. Any compatible should fit.
 **Important!** Select `Install Npcap in WinPcap API-compatible Mode` checkbox!
 2. Compile (or get somewhere) binaries. See instruction below.
 3. Add vpnparty to your firewall exceptions. It needs UDP ports 54928 and 54929 by default.
@@ -71,18 +76,33 @@ sequenceDiagram
 
 ## How to compile
 
+1. Download [Npcap SDK](https://npcap.com/#download) (tested with version 1.13 and 1.16). Unpack wpcap.lib for your platform.
+```bash
+curl -L -o npcap-sdk-1.16.zip https://npcap.com/dist/npcap-sdk-1.16.zip
+tar -xvf npcap-sdk-1.16.zip Lib/x64/wpcap.lib
+```
+
+2. Set `LIBPCAP_LIBDIR` environment variable to point to folder with `wpcap.lib` for your platform. Use one of those methods:
+- `$Env:LIBPCAP_LIBDIR = "C:\path\to\npcap-sdk-1.16\Lib\x64"` (temporary changes)
+- `[System.Environment]::SetEnvironmentVariable("LIBPCAP_LIBDIR", "C:\path\to\npcap-sdk-1.16\Lib\x64", "User")` (permanent changes)
+- Edit the system environment variables → Environment variables → System variables → New
+
+3. Clone and build repository.
 ```bash
 git clone git@github.com:tvladyslav/vpnparty.git
 cd vpnparty
 cargo build --release
-cargo clippy
+cargo clippy --all-targets --all-features -- -D warning
 ```
 
-`target\release` will contain `generator.exe` and `vpnparty.exe`.
+4. `target\release` will contain `generator.exe` and `vpnparty.exe`.
 - generator.exe is the debug tool. It sends 2 broadcast packets (to ports 4549 and 6112) every second. See troubleshooting section for details.
 - vpnparty.exe is the application that you need.
 
 ## Troubleshoot
+
+Q: `LINK : fatal error LNK1181: cannot open input file 'wpcap.lib'`
+A: Please download Npcap **SDK**. Extract. Then create `LIBPCAP_LIBDIR` environment variable, which points to `npcap-sdk-1.16\Lib\x64`.
 
 Q: `wcap.dll was not found`\
 A: Reinstall npcap and remember to select `Install Npcap in WinPcap API-compatible Mode` checkbox.

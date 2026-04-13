@@ -1,4 +1,4 @@
-/// Simplest possible logger
+//! Simplest possible logger
 
 /// Start from 3, this way warn, err and critical are always on.
 pub static mut VERBOSITY: u8 = 4;
