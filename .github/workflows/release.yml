@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*' # triggers on version tags like v1.0.0
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Download Npcap SDK
+      run: |
+        curl -L -o npcap-sdk.zip https://npcap.com/dist/npcap-sdk-1.16.zip
+
+    - name: Extract wpcap.lib from Npcap SDK
+      run: |
+        tar -xvf npcap-sdk.zip Lib/x64/wpcap.lib
+
+    - name: Copy wpcap.lib into project root
+      run: |
+        copy .\Lib\x64\wpcap.lib .
+    
+    - name: Build
+      run: cargo build --release --verbose
+
+    - name: Rename binaries
+      run: |
+        mv target/release/vpnparty.exe target/release/vpnparty-${{ github.ref_name }}.exe
+        mv target/release/generator.exe target/release/generator-${{ github.ref_name }}.exe
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v3
+      with:
+        files: target/release/*.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

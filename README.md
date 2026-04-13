@@ -20,7 +20,7 @@ A LAN party via VPN. Allows games to discover each other through VPN like if the
 
 1. Download and install latest [Npcap](https://npcap.com/#download). Tested with versions 1.79, 1.80 and 1.87. Any compatible should fit.
 **Important!** Select `Install Npcap in WinPcap API-compatible Mode` checkbox!
-2. Compile (or get somewhere) binaries. See instruction below.
+2. Compile or download binaries from release page. See compilation instruction below.
 3. Add vpnparty to your firewall exceptions. It needs UDP ports 54928 and 54929 by default.
 4. Run vpnparty without arguments. Just double-click. Should work as is.
 
