@@ -1,7 +1,7 @@
+use crate::{debug, e, error, Vpacket, SUP, SUP_LEN, SUP_REPLY};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::mpsc::Sender;
-use crate::{e, error, debug, Vpacket, SUP, SUP_LEN, SUP_REPLY};
 
 /// Send Sup! packet to IP range 255.255.255.0
 fn udping(socket: &UdpSocket, ip: Ipv4Addr, port: u16) -> Result<(), String> {
@@ -22,7 +22,7 @@ pub fn run_udping(
     direction_id: usize,
     btx: Sender<Vpacket>,
     src_ip: Ipv4Addr,
-    udping_port: u16
+    udping_port: u16,
 ) -> Result<(), String> {
     let socket_addr: SocketAddr = SocketAddr::new(IpAddr::V4(src_ip), udping_port);
     let udp_socket: UdpSocket = e!(UdpSocket::bind(socket_addr));
@@ -61,8 +61,12 @@ pub fn run_udping(
         }
 
         match buddy_ip {
-            IpAddr::V4(remote_ipv4_addr) => e!(btx.send(Vpacket::U((direction_id, remote_ipv4_addr)))),
-            IpAddr::V6(remote_ipv6_addr) => error!("Received packet from IPv6 address {}", remote_ipv6_addr),
+            IpAddr::V4(remote_ipv4_addr) => {
+                e!(btx.send(Vpacket::U((direction_id, remote_ipv4_addr))))
+            }
+            IpAddr::V6(remote_ipv6_addr) => {
+                error!("Received packet from IPv6 address {}", remote_ipv6_addr)
+            }
         };
     }
     // TODO: close UDP socket

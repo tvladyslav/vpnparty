@@ -3,12 +3,19 @@ use std::sync::mpsc::Sender;
 
 use crate::{debug, e, error, Vpacket, SUP, SUP_LEN, SUP_REPLY};
 
-fn join_multicast_group(src_addr: &Ipv4Addr, m_addr: &Ipv4Addr, m_port: u16) -> Result<UdpSocket, String> {
+fn join_multicast_group(
+    src_addr: &Ipv4Addr,
+    m_addr: &Ipv4Addr,
+    m_port: u16,
+) -> Result<UdpSocket, String> {
     assert!(m_addr.is_multicast());
     let vpn_socket = SocketAddrV4::new(*src_addr, m_port);
     let udp_socket = e!(UdpSocket::bind(vpn_socket));
     e!(udp_socket.join_multicast_v4(m_addr, src_addr));
-    debug!("Join multicast at address {}:{} on interface {}", m_addr, m_port, src_addr);
+    debug!(
+        "Join multicast at address {}:{} on interface {}",
+        m_addr, m_port, src_addr
+    );
     Ok(udp_socket)
 }
 
@@ -18,10 +25,13 @@ pub fn run_multicast(
     btx: Sender<Vpacket>,
     src_ip: Ipv4Addr,
     multicast_ip: Ipv4Addr,
-    multicast_port: u16
+    multicast_port: u16,
 ) -> Result<(), String> {
     let listener: UdpSocket = join_multicast_group(&src_ip, &multicast_ip, multicast_port)?;
-    e!(listener.send_to(&SUP, SocketAddr::new(IpAddr::V4(multicast_ip), multicast_port)));
+    e!(listener.send_to(
+        &SUP,
+        SocketAddr::new(IpAddr::V4(multicast_ip), multicast_port)
+    ));
 
     let mut buf = [0; 100];
 
@@ -52,8 +62,12 @@ pub fn run_multicast(
         }
 
         match buddy_ip {
-            IpAddr::V4(remote_ipv4_addr) => e!(btx.send(Vpacket::M((direction_id, remote_ipv4_addr)))),
-            IpAddr::V6(remote_ipv6_addr) => error!("Received packet from IPv6 address {}", remote_ipv6_addr),
+            IpAddr::V4(remote_ipv4_addr) => {
+                e!(btx.send(Vpacket::M((direction_id, remote_ipv4_addr))))
+            }
+            IpAddr::V6(remote_ipv6_addr) => {
+                error!("Received packet from IPv6 address {}", remote_ipv6_addr)
+            }
         };
     }
     // TODO: leave multicast group

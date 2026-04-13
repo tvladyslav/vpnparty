@@ -2,8 +2,8 @@ use std::{net::Ipv4Addr, str::FromStr};
 
 use pcap::Device;
 
-use crate::{e, logger};
 use crate::network_devices::{get_promising_devices, print_devices};
+use crate::{e, logger};
 
 const HELP: &str = "\
 vpnparty is a next gen LAN party.
@@ -42,9 +42,9 @@ OPTIONS:
 ";
 
 const KNOWN_PORTS: [u16; 3] = [
-    4549,   // Torchlight 2
-    6112,   // Warcraft 3
-    42801,  // Titan Quest
+    4549,  // Torchlight 2
+    6112,  // Warcraft 3
+    42801, // Titan Quest
 ];
 
 /// Command line arguments
@@ -118,12 +118,12 @@ pub fn parse_args() -> Result<Arguments, String> {
                     match s.as_str() {
                         "all" => {
                             port.clear();
-                            break;          // Empty vector means any port
-                        },
+                            break; // Empty vector means any port
+                        }
                         "known" => {
                             port = KNOWN_PORTS.to_vec();
                             break;
-                        },
+                        }
                         _ => {
                             let p = e!(s.parse::<u16>());
                             port.push(p);
@@ -175,6 +175,6 @@ pub fn parse_args() -> Result<Arguments, String> {
         mport,
         uport,
         no_multicast,
-        no_udping
+        no_udping,
     })
 }

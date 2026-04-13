@@ -3,8 +3,8 @@ mod cli_parser;
 mod logger;
 mod multicast_discovery;
 mod network_devices;
-mod udp_discovery;
 mod udp;
+mod udp_discovery;
 
 use pcap::{Active, Capture, Device};
 use std::collections::HashSet;
@@ -16,7 +16,7 @@ use std::vec::Vec;
 
 const MULTICAST_IP: &str = "239.1.2.3";
 const MULTICAST_PORT: u16 = 54929;
-const UDPING_PORT: u16    = 54928;
+const UDPING_PORT: u16 = 54928;
 
 const SUP_LEN: usize = 6;
 const SUP: [u8; SUP_LEN] = [0x00, 0x01, 0x53, 0x75, 0x70, 0x21];
@@ -59,7 +59,8 @@ fn main() -> Result<(), String> {
     debug!("{:?}", devices);
 
     let srcdev: Device = devices.src.clone();
-    let mut vpn_ipv4_cap: Vec<Direction> = network_devices::open_dst_devices(devices, &args.buddyip)?;
+    let mut vpn_ipv4_cap: Vec<Direction> =
+        network_devices::open_dst_devices(devices, &args.buddyip)?;
 
     let (tx, rx) = mpsc::channel();
 
@@ -74,7 +75,13 @@ fn main() -> Result<(), String> {
             let mtx = tx.clone();
             let vpnip = d.vpnip;
             let _multicast_handle = thread::spawn(move || {
-                let _ = multicast_discovery::run_multicast(direction_id, mtx, vpnip, multicast_ip, multicast_port);
+                let _ = multicast_discovery::run_multicast(
+                    direction_id,
+                    mtx,
+                    vpnip,
+                    multicast_ip,
+                    multicast_port,
+                );
             });
         }
 

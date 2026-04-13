@@ -1,4 +1,7 @@
-use std::{net::{IpAddr, Ipv4Addr}, ops::BitAnd};
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    ops::BitAnd,
+};
 
 use pcap::{Address, ConnectionStatus, Device};
 
@@ -197,7 +200,6 @@ pub fn open_dst_devices(
     }
     Ok(vpn_ipv4_cap)
 }
-
 
 fn show_virt_dev_warning(virt: &[Device]) {
     if !virt.is_empty() {
