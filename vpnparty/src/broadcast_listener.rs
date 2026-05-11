@@ -21,7 +21,8 @@ pub fn listen_broadcast(srcdev: Device, btx: Sender<Vpacket>, ports: &[u16]) -> 
 
     // Setup Capture
     let mut hw_cap = e!(e!(pcap::Capture::from_device(srcdev))
-        .immediate_mode(true)
+        .immediate_mode(false)
+        .timeout(150) // This is a workaround, because immediate mode doesn't work in Win11 build
         .open());
 
     e!(hw_cap.filter(full_filter.as_str(), true));
@@ -32,7 +33,10 @@ pub fn listen_broadcast(srcdev: Device, btx: Sender<Vpacket>, ports: &[u16]) -> 
         let packet: Packet = match p {
             Ok(p) => p,
             Err(e) => {
-                error!("Error while receiving broadcast packet: {}", e);
+                let pcap::Error::TimeoutExpired = e else {
+                    error!("Error while receiving broadcast packet: {}", e);
+                    continue;
+                };
                 continue;
             }
         };
