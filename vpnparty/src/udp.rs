@@ -34,7 +34,13 @@ fn ip4_checksum() {
     assert_eq!(given_checksum, expected_checksum);
 }
 
-pub fn craft_udp_packet(given: &[u8], src: &[u8; 4], dst: &[u8; 4], id: Option<u16>) -> Vec<u8> {
+pub fn craft_udp_packet(
+    given: &[u8],
+    src: &[u8; 4],
+    dst: &[u8; 4],
+    dst_port: Option<u16>,
+    id: Option<u16>,
+) -> Vec<u8> {
     let mut no_ether_pktbuf: Vec<u8> = given.to_vec();
 
     // Rewrite Identification field if required
@@ -46,6 +52,11 @@ pub fn craft_udp_packet(given: &[u8], src: &[u8; 4], dst: &[u8; 4], id: Option<u
     // Rewrite source and destination IPs
     no_ether_pktbuf[12..16].copy_from_slice(src);
     no_ether_pktbuf[16..20].copy_from_slice(dst);
+
+    if let Some(port) = dst_port {
+        no_ether_pktbuf[22] = (port >> 8) as u8;
+        no_ether_pktbuf[23] = (port & 0xFF) as u8;
+    }
 
     if rewrite_ip4_checksum(&mut no_ether_pktbuf[0..20]).is_err() {
         critical!("Should never happen! Checksum calculation error.");

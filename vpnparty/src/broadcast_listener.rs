@@ -16,13 +16,16 @@ pub fn listen_broadcast(srcdev: Device, btx: Sender<Vpacket>, ports: &[u16]) -> 
         String::new()
     };
 
-    let full_filter = format!("ip broadcast{}", port_filter);
+    let full_filter = format!(
+        "(ip broadcast) and (src host {}){}",
+        srcdev.addresses[0].addr, port_filter
+    );
     debug!("Broadcast filter: {}", full_filter);
 
     // Setup Capture
     let mut hw_cap = e!(e!(pcap::Capture::from_device(srcdev))
         .immediate_mode(false)
-        .timeout(150) // This is a workaround, because immediate mode doesn't work in Win11 build
+        .timeout(569) // This is a workaround, because immediate mode doesn't work in Win11 build
         .open());
 
     e!(hw_cap.filter(full_filter.as_str(), true));

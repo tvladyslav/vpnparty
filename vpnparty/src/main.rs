@@ -1,6 +1,7 @@
 mod broadcast_listener;
 mod cli_parser;
 mod logger;
+mod mdns_listener;
 mod multicast_discovery;
 mod network_devices;
 mod udp;
@@ -17,6 +18,7 @@ use std::vec::Vec;
 const MULTICAST_IP: &str = "239.1.2.3";
 const MULTICAST_PORT: u16 = 54929;
 const UDPING_PORT: u16 = 54928;
+const MDNS_PORT: u16 = 54927;
 
 const SUP_LEN: usize = 6;
 const SUP: [u8; SUP_LEN] = [0x00, 0x01, 0x53, 0x75, 0x70, 0x21];
@@ -36,6 +38,9 @@ struct Direction {
 enum Vpacket {
     /// Broadcast packet body
     B(Vec<u8>),
+
+    /// mDNS packet body
+    D(Vec<u8>),
 
     /// IP address gathered via multicast
     M((usize, Ipv4Addr)),
@@ -58,7 +63,8 @@ fn main() -> Result<(), String> {
     let devices: network_devices::ParsedDevices = network_devices::get_devices(&args)?;
     debug!("{:?}", devices);
 
-    let srcdev: Device = devices.src.clone();
+    let broadcast_srcdev: Device = devices.src.clone();
+    let mdns_srcdev: Device = devices.src.clone();
     let mut vpn_ipv4_cap: Vec<Direction> =
         network_devices::open_dst_devices(devices, &args.buddyip)?;
 
@@ -107,10 +113,20 @@ fn main() -> Result<(), String> {
     {
         let btx = tx.clone();
         let _broadcast_handle = thread::spawn(move || {
-            let _ = broadcast_listener::listen_broadcast(srcdev, btx, &args.port);
+            let _ = broadcast_listener::listen_broadcast(broadcast_srcdev, btx, &args.port);
         });
 
         info!("Broadcast listener initialized.");
+    }
+
+    // Capture game-related mdns packets
+    {
+        let mtx = tx.clone();
+        let _mdns_handle = thread::spawn(move || {
+            let _ = mdns_listener::listen_mdns(mdns_srcdev, mtx);
+        });
+
+        info!("mDNS listener initialized.");
     }
 
     // TODO: add refresh!
@@ -137,9 +153,32 @@ fn main() -> Result<(), String> {
                             &d.vpnip.octets(),
                             &dstip.octets(),
                             None,
+                            None,
                         );
 
                         trace!("B {:?}", no_ether_pktbuf);
+
+                        if let Err(e) = d.vpncap.sendpacket(&*no_ether_pktbuf) {
+                            error!("Error while resending packet: {}", e);
+                        }
+                    }
+                }
+            }
+            Vpacket::D(data) => {
+                // Start from 14th byte to skip Ethernet Frame.
+                // let no_eth_packet_len = data.len() - 14;
+                for d in &mut vpn_ipv4_cap {
+                    for dstip in &d.buddyip {
+                        // TODO: send via LAN as well!
+                        let no_ether_pktbuf: Vec<u8> = udp::craft_udp_packet(
+                            &data[14..],
+                            &d.vpnip.octets(),
+                            &dstip.octets(),
+                            Some(MDNS_PORT),
+                            None,
+                        );
+
+                        trace!("D {:?}", no_ether_pktbuf);
 
                         if let Err(e) = d.vpncap.sendpacket(&*no_ether_pktbuf) {
                             error!("Error while resending packet: {}", e);
