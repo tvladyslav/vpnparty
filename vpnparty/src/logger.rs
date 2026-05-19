@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vladyslav Tsilytskyi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Simplest possible logger
 
 /// Start from 3, this way warn, err and critical are always on.

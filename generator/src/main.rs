@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vladyslav Tsilytskyi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 
 const WARCRAFT3_PORT: u16 = 6112;
@@ -39,7 +42,7 @@ fn main() -> std::io::Result<()> {
         let _wc3_bytes_sent = wc3_socket.send_to(&WARCRAFT3_PAYLOAD, wc3_dest)?;
         let _tl2_bytes_sent = tl2_socket.send_to(&TORCHLIGHT2_PAYLOAD, tl2_dest)?;
         let _mdns_bytes_sent = mdns_socket.send_to(&WARCRAFT3_MDNS_PAYLOAD, mdns_dest)?;
-        // println!("Sent {} bytes.", _wc3_bytes_sent + _tl2_bytes_sent);
+        // println!("Sent {} bytes.", _wc3_bytes_sent + _tl2_bytes_sent + _mdns_bytes_sent);
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
 }

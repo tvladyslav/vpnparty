@@ -1,25 +1,18 @@
+// SPDX-FileCopyrightText: 2026 Vladyslav Tsilytskyi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::sync::mpsc::Sender;
 
 use pcap::{Device, Packet};
 
+use crate::pcap_filter::{host_filter, port_filter};
 use crate::{debug, e, error, Vpacket};
 
 pub fn listen_broadcast(srcdev: Device, btx: Sender<Vpacket>, ports: &[u16]) -> Result<(), String> {
-    let port_filter: String = if !ports.is_empty() {
-        let placeholder: String = format!(" and ((dst port {})", ports[0]);
-        let mut pstr = ports.iter().skip(1).fold(placeholder, |acc, p: &u16| {
-            acc + &format!(" or (dst port {})", p)
-        });
-        pstr.push(')');
-        pstr
-    } else {
-        String::new()
-    };
+    let port_filter: String = port_filter(ports);
+    let host_filter: String = host_filter(&srcdev.addresses);
 
-    let full_filter = format!(
-        "(ip broadcast) and (src host {}){}",
-        srcdev.addresses[0].addr, port_filter
-    );
+    let full_filter = format!("(ip broadcast) and {}{}", host_filter, port_filter);
     debug!("Broadcast filter: {}", full_filter);
 
     // Setup Capture

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vladyslav Tsilytskyi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::{debug, e, error, Vpacket, SUP, SUP_LEN, SUP_REPLY};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vladyslav Tsilytskyi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::critical;
 
 fn rewrite_ip4_checksum(buf: &mut [u8]) -> Result<(), String> {

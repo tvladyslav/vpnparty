@@ -1,13 +1,18 @@
+// SPDX-FileCopyrightText: 2026 Vladyslav Tsilytskyi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::sync::mpsc::Sender;
 
 use pcap::{Device, Packet};
 
+use crate::pcap_filter::host_filter;
 use crate::{debug, e, error, Vpacket};
 
 pub fn listen_mdns(srcdev: Device, btx: Sender<Vpacket>) -> Result<(), String> {
+    let host_filter: String = host_filter(&srcdev.addresses);
     let mdns_filter: String = format!(
-        "ip and (src host {}) and (dst host 224.0.0.251) and (udp dst port 5353)",
-        srcdev.addresses[0].addr
+        "ip and {} and (dst host 224.0.0.251) and (udp dst port 5353)",
+        host_filter
     );
     debug!("mDNS filter: {}", mdns_filter);
 

@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Vladyslav Tsilytskyi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 mod broadcast_listener;
 mod cli_parser;
 mod logger;
 mod mdns_listener;
 mod multicast_discovery;
 mod network_devices;
+mod pcap_filter;
 mod udp;
 mod udp_discovery;
 

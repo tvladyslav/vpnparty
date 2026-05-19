@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vladyslav Tsilytskyi
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::{net::Ipv4Addr, str::FromStr};
 
 use pcap::Device;
